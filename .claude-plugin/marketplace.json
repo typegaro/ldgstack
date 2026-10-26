@@ -1,0 +1,14 @@
+{
+  "name": "ldgstack",
+  "description": "Personal Claude Code skill collection.",
+  "owner": {
+    "name": "Lorenzo Di Giovanni"
+  },
+  "plugins": [
+    {
+      "name": "spec-workflow",
+      "source": "./plugins/spec-workflow",
+      "description": "Spec-driven development with an autonomous implement → independent test → fix loop and CLI-enforced gates."
+    }
+  ]
+}

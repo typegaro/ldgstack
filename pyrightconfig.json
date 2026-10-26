@@ -1,0 +1,6 @@
+{
+  "extraPaths": [
+    "plugins/spec-workflow/skills/spec-tracker/scripts",
+    "plugins/spec-workflow/skills/spec-cli/scripts"
+  ]
+}

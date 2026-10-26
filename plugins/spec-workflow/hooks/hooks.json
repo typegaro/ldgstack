@@ -1,0 +1,25 @@
+{
+  "description": "Spec workflow guard: workflow state (records, archive and toolkit manifests, assignment markers) is CLI-only; specs are created and edited only by spec.py (new/edit) and accepted specs are frozen; subagents cannot edit specs/ (drafts go to specs/.drafts/) or run spec-mutating commands; the plugin cache is never written; subagents write only inside their lane assignment; advisory: spec-workflow subagent prompts should be a verbatim `spec-tracker brief`",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard_paths.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/brief_check.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Wrapper for the implementation-record tracker CLI; resolves symlinks so it works from PATH.
+here=$(dirname "$(readlink -f "$0")")
+exec python3 "$here/../skills/spec-tracker/scripts/spec_tracker.py" "$@"

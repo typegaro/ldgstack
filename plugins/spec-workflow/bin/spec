@@ -1,0 +1,4 @@
+#!/bin/sh
+# Wrapper for the spec CLI; resolves symlinks so it works from PATH.
+here=$(dirname "$(readlink -f "$0")")
+exec python3 "$here/../skills/spec-cli/scripts/spec.py" "$@"
