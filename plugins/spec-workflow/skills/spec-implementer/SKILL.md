@@ -58,7 +58,11 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 ## 4. Verification and handoff
 
 1. Mark each requirement with `requirement implemented --evidence --location`.
-2. Run formatting, generation, static analysis, architecture checks, and unit and integration tests, and record each with `check add`.
+2. Run formatting, generation, static analysis, architecture checks, and unit and integration tests, and record each with `check add`. Run independent checks at the same time:
+   - use the project's parallel runner (`test.runner`) or background commands;
+   - start the slow suites (e2e, audits) first, and do the quick checks while they run.
+
+   New tests must be parallel-safe: isolated per worker and independent of order. Mark a test serial only with a one-line reason.
 3. Record a check you could not run as `not_run` with the reason, and name it in your report. It doesn't block review or test handoffs, but it blocks acceptance until it runs or the user waives it. Use `not_applicable` (with the reason) only for a check that does not apply.
 4. Run the inspection CLI's `check all` (if it has none, record it as `not_applicable`). A violation is a bug to fix or report, never something to ignore.
 5. Run `spec-check`. Inspect the diff for unrelated edits, leaked secrets, generated-file drift, and boundary violations.

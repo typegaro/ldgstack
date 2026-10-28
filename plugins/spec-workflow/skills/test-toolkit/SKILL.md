@@ -22,6 +22,7 @@ The developer inspection CLI (`dev-inspection`) is the toolkit's `be.inspect` to
 | `fe.inspect` | Snapshot: pruned a11y tree, scroll containers, overflow offenders, focus, console errors, failed requests, visual diff |
 | `fe.audit` | Layout, a11y, and link audits over pages |
 | `env.isolate` | Private copies, free ports, throwaway test databases |
+| `test.runner` | Runs independent suites concurrently, each with its own ports and build directory, under a global concurrency cap. Prints one JSON summary with each suite's result and wall time |
 | `data.cleanup` | Idempotent removal of everything a test created |
 
 Frontend driver design: [references/fe-driver.md](references/fe-driver.md).
@@ -46,6 +47,7 @@ tracker toolkit remove <name> --reason "..."
 - **JSON output**, bounded (default limits, truncation markers), compact enough for an agent's context.
 - **Never print secrets** (except the dev-only inspection CLI under its own guard). Mock credentials are fixed test values.
 - **Read-only or mutating, explicitly** (`--mode`). A mutating tool refuses the dev database and shared data unless the target is named explicitly (`--target`) and is a test target; it records that guard with `--guard`.
+- **Parallel-safe**: state, ports, and build directories are per worker or per run, so suites and tools run at the same time. Anything that must run alone says so with a one-line reason.
 - **Idempotent cleanup**: everything a tool creates is tagged and removable by `data.cleanup`, twice in a row without error.
 - **Self-describing**: `--help` lists commands; errors are JSON with stable codes and non-zero exits.
 - **Smoke test**: a fast command that proves the tool works against the current code (start, one call, stop). `toolkit verify` runs it; only a passing tool can resolve a gap.

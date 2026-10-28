@@ -33,6 +33,10 @@ Before executing anything, map each requirement and plan item to the capabilitie
 - Use the toolchain command prefix the parent supplied. If you cannot build, run, or reach required services, stop and hand off to the parent with the failure. **Never verify by reading code alone.**
 - Prepare isolated test data. Never put secrets in the record.
 - Batch independent reads, greps, and status commands as parallel calls in one turn; read files in bounded ranges.
+- Run tests in parallel:
+  - use the project's runner (`test.runner`) or start independent suites as background commands at the same time, at the project's default worker count;
+  - keep exploring by hand while a long suite runs, and never wait on suites one after another;
+  - if suites can't run concurrently (shared state or fixed ports), record a `test.runner` or `env.isolate` tool gap.
 
 ## 3. Test methods
 
@@ -41,6 +45,7 @@ Use every method the spec and project make applicable:
 - API calls with valid, invalid, unauthorized, cross-owner, repeated, and conflicting inputs.
 - The developer inspection CLI (`dev-inspection`) to verify durable state, relationships, ordering, and lifecycle. Take `snapshot <area>` before and after each action and diff the results. Run `check all` after each scenario, including failure scenarios (if the CLI has no `check all`, record it once as `not_applicable` with the reason). If the CLI can't show state the spec defines, that is a bug.
 - The toolkit's frontend driver (`fe.drive`, `fe.inspect`, `fe.audit`) for user-visible behavior: real UI flows, snapshots for layout, scroll containment, overflow, focus, console errors, and failed requests. A UI spec needs as much rigor as an API spec.
+- Mobile gate: when the toolkit has a mobile audit tool (a tool registered under `fe.audit` that audits phone viewports), every spec that changes frontend UI runs it on the touched routes at the project's phone widths and landscape. Record findings as bugs, unless the project's audit allowlist covers them with a recorded user decision.
 - Stream clients for connection, replay, ordering, terminal, and reconnect behavior.
 - Restart, cancellation, timeout, dependency failure, and concurrency exercises when required (`be.fault`, `be.concurrency`, `ext.mock.<service>` error modes), on isolated data (`env.isolate`, `be.seed`, `data.cleanup`).
 - Conventions: responses match the cross-cutting specs (pagination, error shapes, status codes).

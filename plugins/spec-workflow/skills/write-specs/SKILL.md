@@ -50,8 +50,8 @@ A `feature` or `change` spec that adds or changes persisted or runtime state, a 
 - **Inspection**: the exact inspect commands and fields added or changed (read-only, bounded, deterministic; secrets and the dev-target guard per `dev-inspection`).
 - **Drivers**: tools that exercise the feature without the UI or the model, such as a CLI that creates and drives the resource, with JSON output.
 - **Fault and mocks**: fault injection and external mocks for the failure and recovery paths.
-- **Environment**: the `env.isolate` and toolkit support needed, and each tool's toolkit registration with a smoke test.
-- **Verification**: which scenario is tested with which tool.
+- **Environment**: the `env.isolate` and toolkit support needed, and each tool's toolkit registration with a smoke test. New tests and tools are parallel-safe: per-worker state and ports, and no dependence on order.
+- **Verification**: which scenario is tested with which tool. A spec that changes frontend UI includes the project's mobile audit (an `fe.audit` tool) on the routes it touches, when the toolkit has one.
 
 Each tool is reusable: a durable, generic command (subcommands, flags, JSON output, `--help`) that works for any future resource or scenario of the feature, is registered in the toolkit with a smoke test, and is maintained when the feature changes. One-off scripts, test procedures, and scenario-specific programs don't count. A spec with no state, flow, or integration writes `Not applicable: <reason>`. Decisions and pure docs are exempt. Template and example: [references/testability.md](references/testability.md). `spec validate` makes a missing section an error for specs created by 0.7.1 or later.
 

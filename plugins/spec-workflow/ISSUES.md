@@ -324,3 +324,11 @@ A resumed executor that takes the last 3–4 batches is the most expensive run o
 - "Planner: 0047 file viewer" is attributed to 0046.
 - `--compare` against a retro of the same long-running session compares cumulative totals; it should need disjoint `--since/--until` windows or warn.
 - Common shell failures that are not covered: exit 127 from `gofmt`/`jq`/`psql` run without the direnv prefix and from `T="python3 ..."; $T` (zsh no word split), exit 144 from `pkill -f` matching its own shell (4×). Add these to the bash failure classifier with a fix hint.
+
+## 57. Concurrent `toolkit update --command` overwrites other specs' additions
+
+In m33, lanes for 0046, 0047 and 0051 each updated the shared `be-inspect` entry by rewriting the whole `--command` string, so each one dropped the others' documentation, and `toolkit verify` still passed. Proposal: store per-spec capability notes (`--capability` keyed by owner spec) instead of one free-text command, or have `update` refuse when the entry changed since the caller last read it.
+
+## 58. `spec new --supersedes 0` is accepted and marks spec 0000
+
+`spec new ... --supersedes 0` (a typo for "none") wrote `supersedes: [0]` into the new spec. The guard hook then blocks every way to fix the frontmatter of an unaccepted spec (see #56). `new` should reject 0 when the user meant none, or `edit` should be able to change links.

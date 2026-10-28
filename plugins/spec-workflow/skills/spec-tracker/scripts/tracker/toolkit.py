@@ -13,7 +13,7 @@ from .store import TrackerError, write_atomic
 SCHEMA_VERSION = 1
 CAPABILITIES = (
     "be.inspect", "be.seed", "be.fault", "be.concurrency",
-    "fe.drive", "fe.inspect", "fe.audit", "env.isolate", "data.cleanup",
+    "fe.drive", "fe.inspect", "fe.audit", "env.isolate", "data.cleanup", "test.runner",
 )
 MOCK = re.compile(r"^ext\.mock\.[a-z0-9][a-z0-9-]*$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
