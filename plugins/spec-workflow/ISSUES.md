@@ -300,3 +300,27 @@ After `spec edit` + `spec-sync` on a plan_ready record, `assign --from-plan` fai
 ## 56. `spec edit` can't change a draft's frontmatter (title, amends)
 
 Editing draft 0048 (m33) into "Workspace Read API", which amends 39, 40 and 47, left `title: Workspace Explorer` and `amends: []`, because `edit --from` replaces only the body and there is no `link`/`retitle` command. Proposal: `spec edit <id> --title ... --amends ... --references ...` for unaccepted specs, recorded in the log like body edits.
+
+## Retro 0.8.2 (m33 session b43fa2d7, specs 0036–0050)
+
+### 57. Opus fixers with bundled bugs are the largest cost (retro: fixer.tier)
+Since 0036, fixers took 33% of subagent cost (39.7M of 117.9M cost units, 15 runs). Five Opus first-round fixers took 6.1–7.9M each, with 151–243 tool calls and 244–424k final context (0038 large output, 0039 BUG-021, 0040 bugs 001-009, 0042 bugs 001-005, 0045 bugs 001-004). The orchestrator says fixers run on the efficient tier and escalate to Opus only after a failed retest, but the parent picked Opus for first rounds.
+- **Fix:** `brief --role fixer` takes at most ~4 bugs or one area per fixer (split the rest across fresh fixers on disjoint lanes). Opus is allowed only via `--escalate` after a failed retest or for a critical bug. A fixer that passes ~150k context hands back.
+
+### 58. Final executor batches balloon (retro: executor.final-batch)
+A resumed executor that takes the last 3–4 batches is the most expensive run of its spec: 0038 b5-7 5.8M/167 calls/410k context, 0039 b9-11 5.8M/211/386k, 0045 b2-5 3.5M/130/308k, 0040 b10-11 3.2M/124. Earlier batches cost 0.8–2.0M.
+- **Fix:** at most 2 batches per executor (`brief --batch N` refuses a third on the same assignment without `--fresh`). Split integration/testability batches from feature batches in the plan.
+
+### 59. Planners read like implementers (retro: planner.cost)
+9 Opus planners cost 18.6M (15%) with 215–416k final context and 52–104 calls. That is about 57% of implementer cost for the same specs.
+- **Fix:** planner gets a context budget (~150k) and a repo-map step (`rg --files`, `grep -n` symbol lists) before any full read. Findings cite file:line from grep, not whole-file reads. Hypothesis: most of the context is full-file reads of the existing code.
+
+### 60. Orchestrator forbids pointer briefs that the parent always uses (retro: prompts.not-brief)
+57 of 61 recent non-marker prompts were pointer-style (`cat <brief file>`), against orchestrator SKILL.md step 7 ("Never send a pointer"). Pasted briefs were only 280–860 tokens here, so pasting is cheap. Either enforce pasting or accept pointers (#42); right now the rule and practice disagree, and the retro counts 100 false violations.
+- **Fix:** decide one way. If pointers are allowed, `brief --out <file>` writes the marker on line 1, the hook and the retro rule accept a prompt that names such a file.
+
+### 61. Retro script accuracy (retro: script.accuracy)
+- Plugin-dev runs ("Plugin 0.8.0: spec parallelization", "Build spec-workflow 0.7.0", "Add toolsmith/test-toolkit") are not tagged `plugin_dev`; 2 of the top 3 `cli.rejections` sources are plugin-dev runs.
+- "Planner: 0047 file viewer" is attributed to 0046.
+- `--compare` against a retro of the same long-running session compares cumulative totals; it should need disjoint `--since/--until` windows or warn.
+- Common shell failures that are not covered: exit 127 from `gofmt`/`jq`/`psql` run without the direnv prefix and from `T="python3 ..."; $T` (zsh no word split), exit 144 from `pkill -f` matching its own shell (4×). Add these to the bash failure classifier with a fix hint.
