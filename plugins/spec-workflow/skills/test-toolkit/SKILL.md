@@ -50,6 +50,10 @@ tracker toolkit remove <name> --reason "..."
 - **Self-describing**: `--help` lists commands; errors are JSON with stable codes and non-zero exits.
 - **Smoke test**: a fast command that proves the tool works against the current code (start, one call, stop). `toolkit verify` runs it; only a passing tool can resolve a gap.
 
+## Testability requirements come first
+
+Since 0.7.1 a feature spec's `## Testability` section names the inspect commands, drivers, faults, mocks, and environment support it needs ([write-specs template](../write-specs/references/testability.md)). The executor builds them with the feature, as reusable generic commands (subcommands, flags, JSON, `--help`), registered with smoke tests. They are never one-off scripts or test procedures. Tool gaps cover only what review or testing finds missing later.
+
 ## Tool gaps
 
 Tester or reviewer, before writing any helper:

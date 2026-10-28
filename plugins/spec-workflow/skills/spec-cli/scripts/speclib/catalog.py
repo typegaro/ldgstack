@@ -11,7 +11,7 @@ from .errors import SpecError
 
 FILENAME = re.compile(r"([0-9]{4})-([a-z0-9]+(?:-[a-z0-9]+)*)\.md")
 TOLERATED = {"README.md"}
-STATUSES = ("draft", "in_progress", "accepted", "superseded")
+STATUSES = ("draft", "deferred", "in_progress", "accepted", "superseded")
 
 
 @dataclass
@@ -28,6 +28,7 @@ class Spec:
     amended_by: list[int] = field(default_factory=list)
     superseded_by: list[int] = field(default_factory=list)
     waiting_on: list[int] = field(default_factory=list)
+    deferral: dict[str, Any] | None = None
     workflow: str | None = None
     body: str = ""
 
@@ -136,8 +137,20 @@ def scan(root: Path) -> Catalog:
     return Catalog(root, specs, errors, file_ids)
 
 
+def deferrals(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Specs currently deferred, replayed from the manifest history (`defer` adds, `undefer` removes)."""
+    found: dict[str, dict[str, Any]] = {}
+    for entry in manifest["history"]:
+        if entry.get("action") == "defer":
+            found[entry["specification"]] = {"reason": entry.get("reason", ""), "at": entry.get("at", "")}
+        elif entry.get("action") == "undefer":
+            found.pop(entry["specification"], None)
+    return found
+
+
 def derive_status(catalog: Catalog, manifest: dict[str, Any]) -> None:
     archived = manifest["archived"]
+    deferred = deferrals(manifest)
     active = catalog.root / "implementation" / "active"
     for spec in catalog.specs.values():
         entry = archived.get(spec.name)
@@ -146,6 +159,8 @@ def derive_status(catalog: Catalog, manifest: dict[str, Any]) -> None:
             spec.status = "accepted"
         elif (active / f"{spec.feature}.json").is_file():
             spec.status = "in_progress"
+        elif spec.name in deferred:
+            spec.status, spec.deferral = "deferred", deferred[spec.name]
     accepted = [spec for spec in catalog.ordered() if spec.status == "accepted"]
     for spec in catalog.ordered():
         for target in spec.relations["amends"]:
@@ -210,3 +225,51 @@ def ready_specs(catalog: Catalog) -> list[Spec]:
 def next_spec(catalog: Catalog) -> Spec | None:
     ready = ready_specs(catalog)
     return ready[0] if ready else None
+
+
+def startable_ids(catalog: Catalog) -> set[int]:
+    return {spec.id for spec in ready_specs(catalog)}
+
+
+def plannable_specs(catalog: Catalog) -> list[Spec]:
+    """Draft specs whose unaccepted prerequisites are all being implemented or startable now (lookahead planning)."""
+    startable = startable_ids(catalog)
+    return [
+        spec for spec in catalog.ordered()
+        if spec.kind != "decision" and spec.status == "draft" and spec.waiting_on
+        and all(target in catalog.specs and (catalog.specs[target].status == "in_progress" or target in startable)
+                for target in spec.waiting_on)
+    ]
+
+
+def levels(catalog: Catalog) -> list[list[Spec]]:
+    """Topological levels of every remaining spec (not accepted, superseded, deferred, or a decision).
+    Deferred and decision prerequisites still count as unfinished, so their dependents sit one level later."""
+    check_cycles(catalog)
+    depth: dict[int, int] = {}
+
+    def level(spec: Spec) -> int:
+        if spec.id not in depth:
+            open_targets = [target for target in spec.waiting_on if target in catalog.specs]
+            depth[spec.id] = 1 + max((level(catalog.specs[target]) for target in open_targets), default=-1)
+        return depth[spec.id]
+
+    remaining = [spec for spec in catalog.ordered() if spec.kind != "decision" and spec.status in ("draft", "in_progress")]
+    grouped: dict[int, list[Spec]] = {}
+    for spec in remaining:
+        grouped.setdefault(level(spec), []).append(spec)
+    return [grouped[key] for key in sorted(grouped)]
+
+
+def waves(catalog: Catalog) -> dict[str, Any]:
+    """Scheduling view: what can start now, what can be planned ahead, the remaining levels, and what is deferred."""
+    def brief(spec: Spec) -> dict[str, Any]:
+        return {"id": spec.id, "name": spec.name, "status": spec.status, "kind": spec.kind}
+
+    return {
+        "startable": [brief(spec) for spec in ready_specs(catalog)],
+        "plannable": [{**brief(spec), "blocked_on": spec.waiting_on} for spec in plannable_specs(catalog)],
+        "waves": [[{**brief(spec), "waiting_on": spec.waiting_on} for spec in group] for group in levels(catalog)],
+        "deferred": [{**brief(spec), "reason": (spec.deferral or {}).get("reason", ""), "at": (spec.deferral or {}).get("at", "")}
+                     for spec in catalog.ordered() if spec.status == "deferred"],
+    }

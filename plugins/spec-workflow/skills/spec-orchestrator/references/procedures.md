@@ -21,7 +21,7 @@ It refuses accepted specs (amend them with a new spec, or `unlock` with a user d
 
 ## Dependency start guard
 
-`tracker init` and `handoff --to implementer` refuse a spec whose `depends_on`/`amends` targets are not accepted. Only when the user decides to start early: add `--parent-confirmed --user-decision "<their words>"`; the override is stored in the record and reported by `workflow-retro --conformance`.
+`tracker init` and `handoff --to implementer` refuse a spec whose `depends_on`/`amends` targets are not accepted. `init --early` is the exception when every unaccepted dependency is in progress or startable (see Parallel scheduling). Otherwise, only when the user decides to start early: add `--parent-confirmed --user-decision "<their words>"`; the override is stored in the record and reported by `workflow-retro --conformance`.
 
 ## Lanes (assignments)
 

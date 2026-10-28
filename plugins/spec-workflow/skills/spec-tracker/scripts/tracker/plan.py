@@ -13,6 +13,7 @@ BATCH = re.compile(r"^batch\s+([0-9]+)\b[:.\s-]*(.*)$", re.I)
 REQUIRED = {"ownership": "Ownership", "findings": "Findings", "stop": "Stop conditions", "out": "Out of scope"}
 FENCE = re.compile(r"^```.*?^```", re.M | re.S)
 REQ_ID = re.compile(r"\bREQ-[0-9]+\b")
+REQUIRES = re.compile(r"^\s*(?:\*\*)?Requires:(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
 GLOB = re.compile(r"`([^`\s]+)`")
 # Spec size that requires a plan before the implementer starts, and the size that requires batched briefs.
 PLAN_REQUIREMENTS, PLAN_AREAS = 3, 1
@@ -53,6 +54,20 @@ def ownership_globs(body: str) -> list[str]:
     return list(dict.fromkeys(globs))
 
 
+def parse_requires(body: str, number: int) -> list[str] | None:
+    """Specs a batch needs accepted before it can run: `**Requires:** 0040, 0041`, `none` (independent), or None when absent."""
+    match = REQUIRES.search(FENCE.sub("", body))
+    if match is None:
+        return None
+    value = match.group(1).strip().strip("*").strip()
+    if value.lower().rstrip(".") == "none":
+        return []
+    ids = re.findall(r"\b[0-9]{1,4}\b", value)
+    if not ids:
+        raise TrackerError(f"plan batch {number}: `Requires` must list spec IDs (e.g. 0040, 0041) or `none`; got {value!r}")
+    return list(dict.fromkeys(f"{int(item):04d}" for item in ids))
+
+
 def parse(text: str, requirement_ids: list[str]) -> tuple[dict[str, Any], list[str]]:
     """Validate a plan against the template (references/planning.md); returns the stored form and warnings."""
     parts = sections(text)
@@ -63,7 +78,8 @@ def parse(text: str, requirement_ids: list[str]) -> tuple[dict[str, Any], list[s
         match = BATCH.match(heading)
         if match:
             ids = list(dict.fromkeys(REQ_ID.findall(body)))
-            batches.append({"number": int(match.group(1)), "title": match.group(2).strip(), "requirements": ids, "text": body})
+            number = int(match.group(1))
+            batches.append({"number": number, "title": match.group(2).strip(), "requirements": ids, "requires": parse_requires(body, number), "text": body})
     if not batches:
         missing.append("Batch 1 (at least one `## Batch N: <title>` section)")
     if missing:
@@ -87,8 +103,10 @@ def parse(text: str, requirement_ids: list[str]) -> tuple[dict[str, Any], list[s
     return {"ownership": ownership, "batches": batches, "sections": common, "text": text}, warnings
 
 
-def latest(record: dict[str, Any]) -> dict[str, Any] | None:
+def latest(record: dict[str, Any], any_generation: bool = False) -> dict[str, Any] | None:
     plans = record.get("plans") or []
+    if any_generation:
+        return plans[-1] if plans else None
     current = int(record.get("generation", 1))
     matching = [item for item in plans if int(item.get("generation", 1)) == current]
     return matching[-1] if matching else None

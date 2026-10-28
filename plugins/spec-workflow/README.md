@@ -7,7 +7,7 @@ Specs in `specs/` are the immutable contract. The parent derives each spec's req
 | Kind | Name | Purpose |
 |---|---|---|
 | Skill | `write-specs` | Scope-preserving spec writing, requirement format, append-only evolution, decision specs |
-| Skill | `spec-cli` | `spec.py`: git for specs (new, list, ready, show --effective, log, graph, validate, archive, unlock, promote, adopt) |
+| Skill | `spec-cli` | `spec.py`: git for specs (new, list, ready, waves, defer, show --effective, log, graph, validate, archive, unlock, promote, adopt) |
 | Skill | `adversarial-spec-review` | Contract-level review of specs |
 | Skill | `spec-orchestrator` | Parent loop: implement → review → test → fix in dependency order |
 | Skill | `test-toolkit` | Durable project test toolkit (`implementation/toolkit.json`): capability taxonomy, tool rules, tool gaps, frontend driver design |
@@ -19,7 +19,7 @@ Specs in `specs/` are the immutable contract. The parent derives each spec's req
 | Agent | `spec-implementer` (executor), `spec-fixer` (execution tier) | Code-editing roles |
 | Agent | `spec-toolsmith` | Builds toolkit tools for recorded tool gaps; edits toolkit locations only |
 | Agent | `spec-reviewer` (deep-reasoning tier), `spec-tester` (execution tier) | Read-only roles (no Edit/Write tools) |
-| Hook | `guard_paths.py` | Blocks direct edits and shell writes to `implementation/{active,archive}/`, `spec-archive.json`, and `toolkit.json`; blocks creating spec files outside `spec.py new`; blocks edits to accepted specs unless unlocked; blocks subagent edits and shell writes to `specs/` (except `specs/.drafts/`) and subagent `spec.py new/archive/restore/unlock/relock/promote/adopt` |
+| Hook | `guard_paths.py` | Blocks direct edits and shell writes to `implementation/{active,archive}/`, `spec-archive.json`, and `toolkit.json`; blocks creating spec files outside `spec.py new`; blocks edits to accepted specs unless unlocked; blocks subagent edits and shell writes to `specs/` (except `specs/.drafts/`) and subagent `spec.py new/archive/restore/unlock/relock/defer/undefer/promote/adopt` |
 | Hook | `brief_check.py` | Advisory: warns when a spec-workflow Agent/Task prompt lacks the `tracker brief` marker |
 | Bin | `spec`, `spec-tracker` | Wrappers for the two CLIs |
 
@@ -126,3 +126,24 @@ nix-shell -p 'python3.withPackages(ps: [ps.pytest])' --run 'python3 -m pytest te
 ```
 
 Compatibility tests copy `~/Prj/m33` (`SPEC_WORKFLOW_COMPAT_ROOT`) into a temp dir and skip if it is missing.
+
+## Changes in 0.7.1
+
+Every feature spec ships its own testing and inspection plan, and its test tools are built with the feature (#36, #37, #38).
+
+- write-specs: a `feature`/`change` spec with persisted or runtime state, a UI flow, or an external integration ends with `## Testability`: `- **R<n>** [ops]` requirements for Inspection, Drivers, Fault and mocks, Environment, and Verification. Template and example: `write-specs/references/testability.md`. Use `Not applicable: <reason>` for specs with none of these; decisions and docs are exempt.
+- Reusable tools only: each Testability tool is a durable, generic command (subcommands, flags, JSON output, `--help`) that works for any future resource or scenario of the feature. It is registered in `toolkit.json` with a smoke test and maintained when the feature changes. One-off scripts, test procedures, and scenario-specific programs don't count; tests may call the tools. Review asks: "could a different tester reuse this tool for a new scenario without editing it?"
+- `spec new` stamps an optional `workflow: <plugin version>` frontmatter key and a Testability skeleton. `spec validate` reports a missing or empty section as an error for specs stamped 0.7.1 or later (or every spec with `--strict-testability`), and as a warning for older specs. Accepted legacy specs are summarized in one line. Existing projects keep validating.
+- adversarial-spec-review and spec-reviewer: a Testability check covers every new state, flow, and integration, every named failure path, and tool reusability.
+- Planner: Testability requirements are ordinary executor batches (usually last), never toolsmith work. The toolsmith handles only gaps found later in review or testing (#36).
+- Tracker: requirements imported from `## Testability` are flagged `testability`. Their `requirement implemented` evidence must name a registered toolkit tool whose smoke passed since its last change, plus its smoke check and `--help`; the record stores the tool. `tool-gap add --parent-confirmed` lets the parent record a gap in any role (#36 fallback), and a toolsmith check can back the parent light path. `brief --fresh` releases the role's assignment and issues a new one with the same paths (#37).
+
+## Changes in 0.8.0
+
+The orchestrator prioritizes parallel work (user request 2026-10-27; also resolves #43 and #48).
+
+- `spec waves`: `startable` (= `ready`), `plannable` (draft specs whose unaccepted dependencies are all in progress or startable), topological levels, and `deferred`. `spec defer <id> --reason` / `undefer`: a derived `deferred` status in the manifest history; skipped by `ready`/`next`/`waves`, refused by `tracker init`, still linkable.
+- `tracker init --early`: allowed without a user decision when every unaccepted dependency is in progress or startable. The record stores `early` and `blocked_on`; plans carry `**Requires:** <ids>|none` per batch; `assign --from-plan [--batch N]` and `brief --batch N` refuse batches whose required specs are unaccepted (no line = all of `blocked_on`; escape: `--parent-confirmed --user-decision`); `gate acceptance` and `archive` wait for `blocked_on`; `status` shows `blocked_on_pending`.
+- `tracker overlap --plans`: pairs of active records whose planned ownership globs or active lanes may select the same files, checked before launching parallel executors.
+- `init` leaves the record with the parent (status `new`); `handoff --to planner --parent-confirmed` also works while the executor has implemented nothing. Record schema stays v1; records written by 0.7.x keep working.
+- Orchestrator: "Parallel scheduling" section (plan ahead, early batches, pipelined roles, concurrency cap, per-agent scratch dirs, serialized tracker writes). Planner: `Requires` on every batch, independent batches first.

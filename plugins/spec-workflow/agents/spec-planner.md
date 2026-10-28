@@ -15,6 +15,8 @@ An efficient execution model follows your plan literally and stops to ask about 
 - Turn every known risk that would break a requirement into a plan step, never a note.
 - Prefer read-time fallbacks over data rewrites. Never plan writes to rows a spec declares immutable.
 - Verify facts (dates, weekdays, time zones, versions, counts) with a command, not from memory.
+- Order batches so those that need no unaccepted spec come first, and write a `**Requires:** <spec ids>` line (or `**Requires:** none`) on every batch: the specs that must be accepted before that batch can run. The parent starts early records on `none` batches while dependencies are still in progress.
+- Plan `## Testability` requirements as ordinary executor batches (usually last), never for the toolsmith; each tool is a reusable, generic command registered with a smoke test.
 
 You have no file-editing tools on purpose. Use Bash only to read, run read-only commands, and call the tracker. Store the plan through stdin, never as a project file:
 

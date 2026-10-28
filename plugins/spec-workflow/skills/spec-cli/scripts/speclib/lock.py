@@ -207,3 +207,29 @@ def relock(catalog: Catalog, manifest: Manifest, value: str, confirmed: bool) ->
     )
     save_manifest(root, manifest)
     return {"specification": spec.name, "unlocked": False, "spec_sha256": current}
+
+
+def defer(catalog: Catalog, manifest: Manifest, value: str, reason: str, confirmed: bool) -> dict[str, Any]:
+    """Park a draft spec: history-derived `deferred` status, excluded from ready/next/waves, still a valid link target."""
+    require(confirmed, "defer")
+    if not reason.strip():
+        raise SpecError("defer requires a non-empty --reason")
+    spec = catalog.get(value)
+    if spec.status == "deferred":
+        raise SpecError("specification is already deferred")
+    if spec.status != "draft":
+        raise SpecError(f"only a draft spec can be deferred; {spec.name} is {spec.status}")
+    timestamp = now()
+    manifest["history"].append({"action": "defer", "specification": spec.name, "at": timestamp, "reason": reason})
+    save_manifest(catalog.root, manifest)
+    return {"specification": spec.name, "status": "deferred", "reason": reason}
+
+
+def undefer(catalog: Catalog, manifest: Manifest, value: str, confirmed: bool) -> dict[str, Any]:
+    require(confirmed, "undefer")
+    spec = catalog.get(value)
+    if spec.status != "deferred":
+        raise SpecError("specification is not deferred")
+    manifest["history"].append({"action": "undefer", "specification": spec.name, "at": now()})
+    save_manifest(catalog.root, manifest)
+    return {"specification": spec.name, "status": "draft"}

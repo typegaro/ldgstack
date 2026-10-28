@@ -3,7 +3,7 @@
 Every command takes the feature first, then any item ID.
 
 ```bash
-tracker init specs/0000-project-bootstrap.md
+tracker init specs/0000-project-bootstrap.md [--early]   # --early: dependencies in progress or startable; batches gate on **Requires:**
 tracker status [0000-project-bootstrap]
 tracker requirement list 0000-project-bootstrap
 tracker requirement implemented 0000-project-bootstrap REQ-001 --evidence "..." [--location be/internal/database]
@@ -18,6 +18,7 @@ tracker handoff 0000-project-bootstrap --to tester --completed "..." --remaining
 tracker gate 0000-project-bootstrap ready-test|acceptance
 tracker spec-check 0000-project-bootstrap
 tracker overlap [--depth N]          # changed files (or first N path parts) shared by active records
+tracker overlap --plans              # pairs whose planned ownership globs / active lanes may select the same files
 tracker tool-gap add 0000-project-bootstrap --capability ext.mock.oauth --requirement REQ-003 [--requirement ...] --why "..."
 tracker tool-gap resolve GAP-0000-project-bootstrap-001 --tool fake-oauth --evidence "..."   # toolsmith; tool must provide it and pass verify
 tracker tool-gap list [0000-project-bootstrap] [--open]
@@ -54,8 +55,8 @@ Lanes and briefs (parent):
 tracker assign 0000-project-bootstrap --role implementer --paths 'be/internal/db/**' be/cmd/migrate --parent-confirmed
 tracker assign 0000-project-bootstrap --role tester --read-only --parent-confirmed
 tracker assign 0000-project-bootstrap --release --parent-confirmed
-tracker assign 0000-project-bootstrap --role implementer --from-plan --parent-confirmed   # the latest plan's ownership globs
-tracker brief 0000-project-bootstrap --role implementer [--batch N | --batch REQ-001..REQ-008 [--final-batch]] [--parent-confirmed] [--fresh]
+tracker assign 0000-project-bootstrap --role implementer --from-plan [--batch N] --parent-confirmed   # the latest plan's ownership globs; early records also check the batch's Requires
+tracker brief 0000-project-bootstrap --role implementer [--batch N | --batch REQ-001..REQ-008 [--final-batch]] [--parent-confirmed [--user-decision "..."]] [--fresh]
 tracker brief 0000-project-bootstrap --role planner
 tracker claim ASSIGN-0000-project-bootstrap-001     # an agent's first command (from its brief)
 tracker init specs/0003-x.md --parent-confirmed --user-decision "..."   # only to start before depends_on/amends are accepted

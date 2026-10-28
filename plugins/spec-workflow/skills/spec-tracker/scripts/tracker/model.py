@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import deps
 from .store import TrackerError, digest
 
 ROLES = ("parent", "planner", "implementer", "reviewer", "tester", "fixer", "toolsmith")
@@ -155,7 +156,7 @@ def latest_checks(record: dict[str, Any]) -> list[dict[str, Any]]:
     return list({item["name"]: item for item in record["checks"] if in_current_generation(record, item)}.values())
 
 
-def gate_errors(root: Path, record: dict[str, Any], gate: str) -> list[str]:
+def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tuple[str, ...] = ("tester",)) -> list[str]:
     errors: list[str] = []
     feature = record["feature"]
     if not spec_matches(root, record):
@@ -176,11 +177,14 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str) -> list[str]:
         errors.append("no verification check has passed")
     # A tester's failed check is re-run by the tester on retest; it blocks acceptance, not the handoff back.
     failed = [item["name"] for item in checks if item["result"] == "failed"
-              and (gate == "acceptance" or item.get("role") != "tester")]
+              and (gate == "acceptance" or item.get("role") not in exempt_roles)]
     if failed:
         detail = blocking_checks(record, {"failed"}) if gate == "acceptance" else ", ".join(failed)
         errors.append(f"failing checks: {detail}")
     if gate == "acceptance":
+        waiting = deps.unaccepted(root, record.get("blocked_on") or []) if record.get("early") else []
+        if waiting:
+            errors.append(f"early start: required specs are not accepted yet: {', '.join(waiting)}; accept them first")
         # not_run blocks only acceptance: review and (re)test handoffs don't depend on it.
         if any(item["result"] == "not_run" for item in checks):
             # Reviewer and tester checks are re-recorded by that role, never attested by the parent.

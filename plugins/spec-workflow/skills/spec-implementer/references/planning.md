@@ -11,7 +11,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 
 ## Template
 
-`tracker plan add <feature> --from -` validates these headings: `## Ownership`, `## Findings`, `## Batch N: <title>` (numbered 1..N in order, each naming its `REQ-n`), `## Stop conditions`, `## Out of scope`. Keep sub-structure in bold labels or bullets, not `##` headings, inside a batch.
+`tracker plan add <feature> --from -` validates these headings: `## Ownership`, `## Findings`, `## Batch N: <title>` (numbered 1..N in order, each naming its `REQ-n` and a `**Requires:**` line), `## Stop conditions`, `## Out of scope`. Keep sub-structure in bold labels or bullets, not `##` headings, inside a batch.
 
 ```markdown
 ## Ownership
@@ -25,6 +25,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 
 ## Batch 1: <title, independently testable>
 **Requirements:** REQ-001, REQ-002
+**Requires:** none
 **Files:** exact paths, each with what changes (new, edit at function X).
 **Change shapes:** signatures, struct fields, SQL, and skeletons for anything non-obvious.
 **Edge cases:** each one, with the behavior the spec requires.
@@ -43,6 +44,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 
 ## Batches
 
+- Write `**Requires:**` on every batch: `none` when it touches nothing a still-unaccepted dependency provides, else the spec IDs it needs accepted. A spec started early (`init --early`) runs only batches whose required specs are accepted; a batch without the line counts as requiring all of them. Put `none` batches first.
 - Each batch builds, passes its tests, and leaves the tree consistent on its own. Order them so later batches only add.
 - Put every requirement in exactly one batch. Keep batches small enough for one executor turn sequence (about 3–8 requirements, one or two areas).
 - Name exact files and symbols. "Update the loader" is a gap; "`be/internal/chat/store.go` `loadRun`: add `subagent_count` to the SELECT and scan" is a step.

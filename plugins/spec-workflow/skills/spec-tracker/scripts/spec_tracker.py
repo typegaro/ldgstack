@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--title")
     init.add_argument("--parent-confirmed", action="store_true")
     init.add_argument("--user-decision", help="start before depends_on/amends are accepted (the user's words)")
+    init.add_argument("--early", action="store_true",
+                      help="start while every unaccepted dependency is in progress or startable; batches gate on `**Requires:**`, acceptance on all of them")
     status = commands.add_parser("status", help="summarize one or all active records")
     status.add_argument("feature", nargs="?")
     commands.add_parser("list", help="summarize all active records")
@@ -158,18 +160,22 @@ def build_parser() -> argparse.ArgumentParser:
     lane.add_argument("--read-only", action="store_true", help="the agent may edit nothing in the project")
     lane.add_argument("--release", action="store_true", help="end this record's active assignment")
     lane.add_argument("--from-plan", action="store_true", help="use the latest plan's ownership globs")
+    assign.add_argument("--batch", type=int, metavar="N", help="with --from-plan on an early record: the plan batch the lane is for")
+    assign.add_argument("--user-decision", help="early record: run a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
     commands.add_parser("claim", help="first command of a brief: binds this agent to its assignment (the hook records it)").add_argument("assignment")
     brief = command(commands, "brief", help="print the delegation prompt for the record's current role")
     brief.add_argument("--role", required=True, choices=[role for role in ROLES if role != "parent"])
     brief.add_argument("--batch", metavar="N|REQ-a..REQ-b", help="implementer batch: a plan batch number or a requirement range")
     brief.add_argument("--final-batch", action="store_true")
     brief.add_argument("--parent-confirmed", action="store_true", help="allow an unbatched or unplanned implementer brief")
+    brief.add_argument("--user-decision", help="early record: brief a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
     brief.add_argument("--fresh", action="store_true", help="release the role's active assignment and issue a new one (same paths) for a fresh agent")
 
     gate_parser = commands.add_parser("gate", help="gate <feature> ready-test|acceptance")
     gate_parser.add_argument("first", metavar="feature")
     gate_parser.add_argument("second", metavar="gate")
     overlap = commands.add_parser("overlap", help="changed files shared by active records")
+    overlap.add_argument("--plans", action="store_true", help="compare planned ownership globs and active lanes instead of changed files")
     overlap.add_argument("--depth", type=int, default=0, help="compare the first N path components (0: whole paths)")
     command(commands, "spec-check")
     command(commands, "spec-sync", confirmed=True).add_argument("--reason", required=True)
@@ -201,7 +207,12 @@ def gap_item(parent: Any, name: str, help: str) -> argparse.ArgumentParser:
 
 def summary(record: Record, root: Path | None = None) -> Record:
     requirements = record["requirements"]
+    early: Record = {}
+    if record.get("early"):
+        waiting = deps.unaccepted(root, record.get("blocked_on") or []) if root is not None else list(record.get("blocked_on") or [])
+        early = {"early": True, "blocked_on": record.get("blocked_on") or [], "blocked_on_pending": waiting}
     return {
+        **early,
         "feature": record["feature"], "status": record["status"], "current_role": record["current_role"],
         "generation": generation(record),
         "requirements": {
@@ -249,17 +260,29 @@ def initialize(root: Path, args: argparse.Namespace) -> Record:
         "schema_version": 1, "managed_by": "spec_tracker.py", "feature": feature,
         "title": args.title or feature.replace("-", " ").title(),
         "specification": {"path": spec.relative_to(root).as_posix(), "sha256": digest(spec), "history": []},
-        "status": "implementing", "current_role": "implementer", "generation": 1,
+        "status": "new", "current_role": "parent", "generation": 1,
         "created_at": timestamp, "updated_at": timestamp,
         "requirements": [], "changed_files": [], "checks": [], "bugs": [], "blockers": [],
         "handoff": {"completed": "", "remaining": "", "checks_not_run": "", "next_role": ""},
     }
-    start_guard(root, record, args.parent_confirmed, args.user_decision, "init")
+    if spec.name in deps.deferred_names(root):
+        raise TrackerError(f"{spec.name} is deferred; `spec undefer <id> --parent-confirmed` first")
+    waiting = deps.pending(root, spec)
+    if args.early and waiting and deps.early_startable(root, spec):
+        record["early"], record["blocked_on"] = True, [deps.spec_id(name) for name in waiting]
+    else:
+        if args.early and waiting and not (args.parent_confirmed and args.user_decision):
+            raise TrackerError(f"--early needs every unaccepted dependency ({', '.join(waiting)}) to be in progress or startable; "
+                               f"otherwise only with the user's decision: --parent-confirmed --user-decision \"<the user's words>\"")
+        start_guard(root, record, args.parent_confirmed, args.user_decision, "init")
     save(root, record)
     return summary(record, root)
 
 
 def start_guard(root: Path, record: Record, confirmed: bool, decision: str | None, during: str) -> None:
+    spec = root / record["specification"]["path"]
+    if record.get("early") and {deps.spec_id(name) for name in deps.pending(root, spec)} <= set(record.get("blocked_on") or []):
+        return  # early start: batches and acceptance gate on blocked_on instead
     try:
         deps.guard(root, record, root / record["specification"]["path"], confirmed, decision, during, now())
     except ValueError as error:
@@ -688,7 +711,9 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
 
     def change(record: Record) -> None:
         source, target = record["current_role"], args.to
-        if target not in HANDOFFS[source]:
+        first_look = source == target == "parent" and record["status"] == "new"  # old flow: init, then handoff --to parent
+        replan = (source, target) == ("implementer", "planner") and args.parent_confirmed and not any(item["implemented"] for item in record["requirements"])
+        if target not in HANDOFFS[source] and not first_look and not replan:
             raise TrackerError(f"{source} cannot hand off to {target}; allowed: {', '.join(sorted(HANDOFFS[source]))}")
         if args.question:
             ask(record, args)
@@ -710,7 +735,8 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
         if target in {"reviewer", "tester"}:
             if source in {"fixer", "reviewer"} and any(item["status"] in {"open", "assigned"} for item in record["bugs"]):
                 raise TrackerError(f"{source} cannot hand off to {target} while bugs are open or assigned; hand off to parent")
-            errors = gate_errors(root, record, "ready-test")
+            # A role re-records its own failed checks after receiving the record (#17, #39).
+            errors = gate_errors(root, record, "ready-test", exempt_roles=("tester", target))
             if errors:
                 raise TrackerError("handoff blocked: " + "; ".join(errors))
             if target == "reviewer":
@@ -734,6 +760,11 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
             if not gaps:
                 raise TrackerError("no open tool gaps for toolsmith")
             record["status"] = "tooling"
+        if source != target and source in {"implementer", "fixer", "toolsmith"}:
+            # A finished writer frees its lane so parallel specs can claim those paths (#51).
+            for item in record.get("assignments", []):
+                if item["status"] == "active" and item["role"] == source:
+                    item.update(status="released", released_at=now(), released_by="handoff")
         if target in READ_ONLY_ROLES:
             auto_assign(record, target)
         record["current_role"] = target
@@ -827,7 +858,29 @@ def gate(root: Path, args: argparse.Namespace) -> Record:
     return result
 
 
+def planned_globs(record: Record) -> list[str]:
+    """Ownership of the record's latest plan (any generation) plus the paths of its active assignments."""
+    stored = record.get("plans") or []
+    globs = list((plans.latest(record) or (stored[-1] if stored else {})).get("ownership") or [])
+    globs += [glob for item in record.get("assignments", []) if item["status"] == "active" for glob in item.get("paths") or []]
+    return list(dict.fromkeys(globs))
+
+
+def overlap_plans(root: Path) -> list[Record]:
+    """Pairs of active records whose planned or assigned globs may select the same files (approximate: literal prefixes)."""
+    records = [(record["feature"], planned_globs(record)) for record in load_all(root)]
+    shared = []
+    for index, (feature, globs) in enumerate(records):
+        for other, other_globs in records[index + 1:]:
+            pairs = list(dict.fromkeys(f"{left} <-> {right}" for left, right in lanes.overlap(globs, other_globs)))
+            if pairs:
+                shared.append({"features": [feature, other], "globs": pairs})
+    return shared
+
+
 def overlap(root: Path, args: argparse.Namespace) -> list[Record]:
+    if args.plans:
+        return overlap_plans(root)
     def area(path: str) -> str:
         parts = Path(path).parts
         return "/".join(parts[: args.depth] if args.depth > 0 else parts)
@@ -902,16 +955,46 @@ def restore(root: Path, args: argparse.Namespace) -> Record:
     return summary(record, root)
 
 
+def early_gate(root: Path, record: Record, candidates: list[Record | None], confirmed: bool, decision: str | None, during: str) -> Record | None:
+    """An early record may run a batch only when the specs it requires are accepted (any candidate batch suffices).
+    Returns the override to store when the parent overrides with the user's decision, else None."""
+    if not record.get("early"):
+        return None
+    blocked = [deps.blocked_batch(record, item, root) for item in candidates]
+    if any(not item for item in blocked):
+        return None
+    waiting = sorted({name for item in blocked for name in item})
+    if confirmed and decision and decision.strip():
+        return {"pending": waiting, "user_decision": decision, "during": during, "at": now()}
+    raise TrackerError(f"early start: {record['feature']} still requires unaccepted specs {', '.join(waiting)} for this batch; run a batch marked "
+                       f"`**Requires:** none` or one whose required specs are accepted, or (user decision only) --parent-confirmed --user-decision \"<the user's words>\"")
+
+
+def plan_batches(record: Record, number: int | None, whole: bool) -> list[Record | None]:
+    """The batches a lane or brief covers: the named one, else every batch (`whole`: it runs them all, a single-batch plan counts as its batch)."""
+    plan = plans.latest(record)
+    if plan is None:
+        return [None]
+    if number is not None:
+        return [plans.batch(plan, number)]
+    return [plan["batches"][0]] if whole and len(plan["batches"]) == 1 else [None] if whole else list(plan["batches"])
+
+
 def assign(root: Path, args: argparse.Namespace) -> Record:
     tracker = "spec-tracker"
     if not args.release and not args.role:
         raise TrackerError(f"--role is required; e.g. `{tracker} assign {args.feature} --role implementer --paths be/internal/chat/** --parent-confirmed`")
+    override = None
     try:
         if args.from_plan:
-            latest_plan = plans.latest(load(root, args.feature))
+            # Fix rounds bump the generation; fixers and toolsmiths keep the plan's ownership.
+            latest_plan = plans.latest(load(root, args.feature), any_generation=args.role in ("fixer", "toolsmith"))
             if latest_plan is None:
                 raise TrackerError(f"no plan stored for {args.feature}; `{tracker} plan add {args.feature} --from <file>` first")
             globs = list(latest_plan["ownership"])
+            if args.role == "implementer":
+                record = load(root, args.feature)
+                override = early_gate(root, record, plan_batches(record, args.batch, False), args.parent_confirmed, args.user_decision, "assign")
         else:
             globs = [] if args.release or args.read_only else [lanes.validate(item) for item in args.paths]
     except ValueError as error:
@@ -920,6 +1003,8 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
 
     def change(record: Record) -> None:
         require_confirmation(args.parent_confirmed, "assigning paths")
+        if override:
+            record.setdefault("dependency_overrides", []).append(override)
         items = record.setdefault("assignments", [])
         for item in items:
             if item["status"] == "active":
@@ -973,6 +1058,12 @@ def fresh_assignment(root: Path, args: argparse.Namespace) -> None:
 
 
 def brief(root: Path, args: argparse.Namespace) -> str:
+    record = load(root, args.feature)
+    if args.role == "implementer":
+        number = briefs.plan_batch(record, args.batch)
+        override = early_gate(root, record, plan_batches(record, number, True), args.parent_confirmed, args.user_decision, "brief")
+        if override:
+            edit(root, args.feature, set(ROLES), lambda item: item.setdefault("dependency_overrides", []).append(override))
     if args.fresh:
         fresh_assignment(root, args)
     record = load(root, args.feature)
@@ -1003,7 +1094,8 @@ def output(value: Any, as_json: bool) -> None:
     elif isinstance(value, list):
         for item in value:
             if "status" in item and "current_role" in item:
-                print(f"{item['feature']}: {item['status']} ({item['current_role']})")
+                early = f" [early, waiting on {', '.join(item['blocked_on_pending'])}]" if item.get("blocked_on_pending") else ""
+                print(f"{item['feature']}: {item['status']} ({item['current_role']}){early}")
             else:
                 print(" | ".join(f"{key}: {field}" for key, field in item.items()))
     elif "lines" in value:
@@ -1012,7 +1104,7 @@ def output(value: Any, as_json: bool) -> None:
             print(line)
     elif "status" in value and "current_role" in value:
         print(f"{value['feature']}: {value['status']} ({value['current_role']})")
-        for key in ("plan_version", "batches", "ownership", "superseded", "added", "skipped", "warnings", "open_questions"):
+        for key in ("blocked_on_pending", "plan_version", "batches", "ownership", "superseded", "added", "skipped", "warnings", "open_questions"):
             items = value.get(key)
             for item in items if isinstance(items, list) else [items] if items else []:
                 print(f"{key}: {item}")

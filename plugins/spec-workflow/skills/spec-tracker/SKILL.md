@@ -25,9 +25,11 @@ Each mutation requires the record's current role:
 | fixer | `file add`, `check add`, `bug fixed`, `blocker add` | reviewer, parent |
 | toolsmith | `file add`, `check add`, `tool-gap resolve`, `blocker add` | tester (no open tool gaps), parent |
 
-Normal flow: `init` → parent derives requirements → planner → parent (`assign --from-plan`) → implementer (executor, per batch) → reviewer → tester → parent. Findings go back through parent → fixer → fresh review → tester; tool gaps through parent → toolsmith → tester. No role hands off to the tester while a tool gap is open.
+Normal flow: `init` (the record starts with the parent, status `new`) → parent derives requirements → planner → parent (`assign --from-plan`) → implementer (executor, per batch) → reviewer → tester → parent. Findings go back through parent → fixer → fresh review → tester; tool gaps through parent → toolsmith → tester. No role hands off to the tester while a tool gap is open.
 
 - Any subagent role may `handoff --to parent --question "..."` (status `needs_answer`) instead of improvising. The parent runs `answer <feature> --text "..."` (back to the asker, same status as before) or `--replan` (to the planner, status `planning`). Answers appear in later briefs' `Decisions`.
+- `init --early` (parent) starts a spec whose unaccepted dependencies are all in progress or startable, without a user decision: the record stores `early` and `blocked_on`, `status` shows `blocked_on_pending`, `assign --from-plan [--batch N]` and `brief --batch N` refuse a batch whose plan `**Requires:** <ids>|none` line names an unaccepted spec (no line = all of `blocked_on`), and `gate acceptance` and `archive` fail until all of `blocked_on` are accepted. `--parent-confirmed --user-decision` overrides a batch (stored in `dependency_overrides`).
+- `handoff --to planner --parent-confirmed` also works while the executor has implemented nothing. `handoff --to parent` straight after `init` is a no-op kept for old flows.
 - `handoff --to implementer` needs a stored plan when the spec has more than 3 requirements or more than one area (top-level dirs of the implementer lane, plan ownership, changed files), unless `--parent-confirmed --reason "..."`. `handoff --to planner|tester` creates a read-only assignment when none is active.
 - `implementer → tester` skips review only when a reviewer check already passed, every requirement implemented since then was also added since then, and no bug is unresolved. The handoff records `review_skipped`.
 - With `--parent-confirmed`, the parent may `requirement add/import` and `blocker resolve` while the record is in any role; the role at the time is logged.
@@ -59,6 +61,7 @@ tracker plan add <feature> --from FILE|-           # planner (or parent); plan s
 tracker handoff <feature> --to <role> --completed "..." --remaining "..."   # or: --to parent --question "..."
 tracker answer <feature> --text "..." [--replan]   # parent
 tracker gate <feature> ready-test|acceptance
+tracker overlap [--depth N | --plans]            # --plans: planned/assigned globs that may select the same files
 tracker assign|brief|claim ...                  # lanes and generated delegation prompts (parent); brief --fresh renews the assignment
 ```
 

@@ -262,10 +262,10 @@ class PapercutTest(CliTestCase):
     def test_drafts_new_from_and_promote(self) -> None:
         drafts = self.root / "specs" / ".drafts"
         drafts.mkdir()
-        (drafts / "proposal.md").write_text("# Proposal\n\n- **R1** Proposed behavior.\n", encoding="utf-8")
+        (drafts / "proposal.md").write_text("# Proposal\n\n- **R1** Proposed behavior.\n\n## Testability\n\nNot applicable: test fixture.\n", encoding="utf-8")
         self.spec("new", "--title", "Proposal", "--kind", "feature", "--from", "README.md", succeeds=False)
         created = self.spec("new", "--title", "Proposal", "--kind", "feature", "--from", "specs/.drafts/proposal.md")["result"]
-        self.assertTrue((self.root / created["path"]).read_text(encoding="utf-8").endswith("---\n\n# Proposal\n\n- **R1** Proposed behavior.\n"))
+        self.assertTrue((self.root / created["path"]).read_text(encoding="utf-8").endswith("---\n\n# Proposal\n\n- **R1** Proposed behavior.\n\n## Testability\n\nNot applicable: test fixture.\n"))
         self.assertFalse((drafts / "proposal.md").exists())
         self.spec("validate")
 
@@ -352,8 +352,8 @@ class SmokeTest(CliTestCase):
         drafts = self.root / "specs" / ".drafts"
         drafts.mkdir()
         bodies = {
-            "core": "# Core\n\n## Requirements\n\n- **R1** [api] Create items.\n- **R2** List items\n  newest first.\n",
-            "ui": "# UI\n\n## Requirements\n\n- **R1** [ux] Show items. (amends 0:R2)\n",
+            "core": "# Core\n\n## Requirements\n\n- **R1** [api] Create items.\n- **R2** List items\n  newest first.\n\n## Testability\n\nNot applicable: test fixture.\n",
+            "ui": "# UI\n\n## Requirements\n\n- **R1** [ux] Show items. (amends 0:R2)\n\n## Testability\n\nNot applicable: test fixture.\n",
             "decision": "# Accept: no auth\n\n- **R1** Decision: single-user MVP.\n",
         }
         for name, body in bodies.items():
@@ -409,9 +409,7 @@ class SmokeTest(CliTestCase):
         self.assertEqual([item["spec_ref"] for item in archived["requirements"]], ["1:R1", "0:R2"])
         self.assertEqual([item["status"] for item in self.spec("list")["result"]], ["accepted", "accepted", "accepted"])
         self.assertIsNone(self.spec("next")["result"])
-        validated = self.spec("validate")["result"]
-        self.assertEqual((validated["valid"], validated["specification_count"]), (True, 3))
-        self.assertIn("accepted legacy feature/change specs", validated["warnings"][0])  # 0.7.1: warnings only
+        self.assertEqual(self.spec("validate")["result"], {"valid": True, "specification_count": 3})
         self.assertEqual(self.tracker("status")["result"], [])
 
 

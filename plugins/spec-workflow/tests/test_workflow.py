@@ -207,7 +207,9 @@ class TrackerTest(CliTestCase):
         self.handoff("fixer", succeeds=False)
 
     def test_only_parent_defines_requirements_and_list_hides_evidence(self) -> None:
-        self.tracker("init", FEATURE)
+        started = self.tracker("init", FEATURE)["result"]
+        self.assertEqual((started["status"], started["current_role"]), ("new", "parent"))
+        self.handoff("implementer")
         self.tracker("requirement", "add", FEATURE, "--spec-ref", "x", "--verification", "y", succeeds=False)
         self.handoff("parent")
         self.tracker("requirement", "add", FEATURE, "--spec-ref", "x", "--verification", "y")
@@ -226,6 +228,7 @@ class TrackerTest(CliTestCase):
 
     def test_blocker_history_and_spec_sync(self) -> None:
         self.tracker("init", FEATURE)
+        self.handoff("implementer")
         self.tracker("blocker", "add", FEATURE, "--summary", "contradiction", "--report", "details")
         self.handoff("parent")
         self.assertEqual(self.tracker("status", FEATURE)["result"]["status"], "blocked")

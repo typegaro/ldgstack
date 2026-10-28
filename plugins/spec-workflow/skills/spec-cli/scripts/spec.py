@@ -57,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     unlock.add_argument("--reason", required=True)
     unlock.add_argument("--user-decision", required=True)
     confirmed(commands, "relock").add_argument("spec")
+    defer = confirmed(commands, "defer")
+    defer.add_argument("spec")
+    defer.add_argument("--reason", required=True)
+    confirmed(commands, "undefer").add_argument("spec")
+    commands.add_parser("waves", help="startable, plannable (lookahead), topological levels, and deferred specs")
     promote = confirmed(commands, "promote")
     promote.add_argument("spec")
     promote.add_argument("--from", dest="draft", required=True, metavar="DRAFT", help="a specs/.drafts/ body file")
@@ -132,10 +137,33 @@ def run_locked(root: Path, args: argparse.Namespace) -> Result:
         "restore": lambda: lock.restore(specs, manifest, args.spec, args.reason, args.parent_confirmed),
         "unlock": lambda: lock.unlock(specs, manifest, args.spec, args.reason, args.user_decision, args.parent_confirmed),
         "relock": lambda: lock.relock(specs, manifest, args.spec, args.parent_confirmed),
+        "defer": lambda: lock.defer(specs, manifest, args.spec, args.reason, args.parent_confirmed),
+        "undefer": lambda: lock.undefer(specs, manifest, args.spec, args.parent_confirmed),
+        "waves": lambda: waves(specs),
         "promote": lambda: authoring.promote(specs, manifest, args.spec, args.draft, args.parent_confirmed, args.reason, args.user_decision),
         "edit": lambda: authoring.edit(specs, manifest, args.spec, args.source, args.reason, args.user_decision, args.conflict, args.parent_confirmed),
     }
     return handlers[args.command]()
+
+
+def waves(specs: catalog.Catalog) -> dict[str, Any]:
+    try:
+        return catalog.waves(specs)
+    except SpecError as error:
+        raise SpecError(f"cannot schedule: {error}") from error
+
+
+def waves_text(value: dict[str, Any]) -> str:
+    def names(items: list[dict[str, Any]], key: str = "", label: str = "") -> str:
+        def one(item: dict[str, Any]) -> str:
+            waiting = f" ({label} {', '.join(catalog.label(target) for target in item[key])})" if key and item.get(key) else ""
+            return f"{catalog.label(item['id'])} {item['name'][5:-3]}{waiting}"
+        return ", ".join(one(item) for item in items) or "none"
+
+    lines = [f"startable: {names(value['startable'])}", f"plannable: {names(value['plannable'], 'blocked_on', 'blocked on')}"]
+    lines.extend(f"wave {index}: {names(group, 'waiting_on', 'waiting on')}" for index, group in enumerate(value["waves"]))
+    deferred = ", ".join(f"{catalog.label(item['id'])} {item['name'][5:-3]} ({item['reason']})" for item in value["deferred"]) or "none"
+    return "\n".join([*lines, f"deferred: {deferred}"])
 
 
 def status(specs: catalog.Catalog) -> dict[str, Any]:
@@ -173,6 +201,8 @@ def text(args: argparse.Namespace, value: Result) -> str:
         return views.log_text(value)
     if args.command == "graph":
         return views.mermaid(value) if args.mermaid else json.dumps(value, indent=2)
+    if args.command == "waves":
+        return waves_text(value)
     if args.command in ("list", "ready"):
         return "\n".join(spec_line(item) for item in value) or "none"
     if args.command == "next":

@@ -301,7 +301,9 @@ class PlanningCompatibilityTest(unittest.TestCase):
         for command in ("status", "list"):
             for record in self.run_cli("spec-tracker", command)["result"]:
                 self.assertIn("open_questions", record)
-        archived = sorted(path.stem for path in (self.root / "implementation" / "archive").glob("*.json"))[-1]
+        # Newest archived record whose spec predates Testability requirements (0.7.1).
+        archived = [path.stem for path in sorted((self.root / "implementation" / "archive").glob("*.json"))
+                    if "## Testability" not in (self.root / "specs" / f"{path.stem}.md").read_text(encoding="utf-8")][-1]
         self.run_cli("spec-tracker", "restore", archived, "--parent-confirmed")
         status = self.run_cli("spec-tracker", "status", archived)["result"]
         self.assertEqual((status["plan_version"], status["open_questions"]), (None, []))
@@ -320,3 +322,23 @@ class PlanningCompatibilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewerFailedCheckHandoffTest(PlanCase):
+    def test_reviewer_owned_failed_check_does_not_block_handoff_to_reviewer(self) -> None:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/spec-tracker/scripts'))
+        from tracker.model import gate_errors
+        record = {"feature": "0000-demo", "requirements": [{"id": "REQ-001", "spec_ref": "0:R1", "verification": "v", "implemented": True, "tested": False}], "tool_gaps": [], "plan": None,
+                  "checks": [{"name": "ok", "result": "passed", "role": "implementer"},
+                             {"name": "rev", "result": "failed", "role": "reviewer"}],
+                  "blockers": [], "bugs": []}
+        import tracker.model as m
+        orig = m.spec_matches
+        m.spec_matches = lambda root, record: True
+        try:
+            self.assertFalse(any("failing" in e for e in gate_errors(self.root, record, "ready-test", exempt_roles=("tester", "reviewer"))))
+            self.assertTrue(any("failing" in e for e in gate_errors(self.root, record, "ready-test")))
+            self.assertTrue(any("failing" in e for e in gate_errors(self.root, record, "acceptance", exempt_roles=("tester", "reviewer"))))
+        finally:
+            m.spec_matches = orig

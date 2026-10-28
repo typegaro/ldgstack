@@ -66,7 +66,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 
 ## Planner role
 
-Load this skill for its boundaries, then follow the planner agent and [references/planning.md](references/planning.md): plan template, mandatory checks (dependency trace, risks as steps, read-time fallbacks over rewrites, facts verified by command), and batching rules. The planner edits nothing; it stores the plan with `tracker plan add <feature> --from -`.
+Load this skill for its boundaries, then follow the planner agent and [references/planning.md](references/planning.md): plan template, mandatory checks (dependency trace, risks as steps, read-time fallbacks over rewrites, facts verified by command), and batching rules (every batch carries a `**Requires:**` line; independent batches first). The planner edits nothing; it stores the plan with `tracker plan add <feature> --from -`.
 
 ## Fixer role
 

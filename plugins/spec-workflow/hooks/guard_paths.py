@@ -33,7 +33,7 @@ WARNINGS: list[str] = []
 MANIFEST = "implementation/spec-archive.json"
 DRAFTS = "specs/.drafts/"
 SPEC_COMMANDS = {"spec.py", "spec"}
-MUTATING_SPEC_COMMANDS = {"new", "edit", "archive", "restore", "unlock", "relock", "promote", "adopt"}
+MUTATING_SPEC_COMMANDS = {"new", "edit", "archive", "restore", "unlock", "relock", "promote", "adopt", "defer", "undefer"}
 # Commands whose path arguments are written; a best-effort net, since Bash can write files in many other ways.
 WRITING_COMMANDS = {"mv", "rm", "touch", "tee", "truncate", "mkdir", "rmdir"}
 DESTINATION_COMMANDS = {"cp", "install", "ln", "rsync"}  # only the last argument is written
