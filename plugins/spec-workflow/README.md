@@ -239,3 +239,7 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 
 - Parallel executors: an executor ends its batch with `tracker join <feature> --assignment <ID> --completed "..."` (its brief's Next command), releasing only its own lane; `handoff` is refused while sibling executor lanes are active, so one executor can no longer end another's lane mid-work.
 - `brief --batch N` with several parallel lanes refuses when batch N has no lane of its own, instead of reissuing a sibling batch's lane (which released every lane and blocked the next `assign --parallel`).
+
+## Changes in 0.10.4
+
+- Fixes a 0.10.3 regression: sequential (non-parallel) batches end without a handoff again, so the next `brief --batch N+1` finds the lane; only executors with parallel siblings end with `join --assignment`.

@@ -133,9 +133,11 @@ def next_command(tracker: str, feature: str, role: str, final: bool, batch: str 
         return f'{tracker} join {feature} --completed "..."   (you work alongside the fixer; never `handoff`)'
     handoff = f'{tracker} handoff {feature} --to {{target}} --completed "..." --remaining "..."'
     if role == "implementer":
-        if (batch and not final) or siblings:
-            return (f'{tracker} join {feature} --assignment {assignment} --completed "..."   (ends only your batch lane; never `handoff`'
-                    + (", other executors are working in parallel)" if siblings else ")"))
+        if siblings:
+            return (f'{tracker} join {feature} --assignment {assignment} --completed "..."   '
+                    "(ends only your batch lane; never `handoff`: other executors are working in parallel)")
+        if batch and not final:
+            return "none: end without a handoff; the parent resumes you with the next batch"
         return handoff.format(target="reviewer") + "   (blocked: --to parent)"
     if role == "reviewer":
         return handoff.format(target="tester") + "   (bugs, blockers, or tool gaps: --to parent)"
