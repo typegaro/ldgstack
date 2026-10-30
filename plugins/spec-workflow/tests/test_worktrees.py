@@ -201,6 +201,26 @@ class AbandonTest(WorktreeCase):
         self.assertEqual(self.guard(f"implementation/abandoned/{FEATURE}.json").returncode, 2)
 
 
+class SiblingRepoTest(WorktreeCase):
+    def test_sibling_repo_paths_follow_the_checkout(self) -> None:
+        self.tracker("toolkit", "add", "fe-drive", "--capability", "fe.drive", "--location", "fe/src",
+                     "--command", "cd be && cat ../fe/src/app.ts", "--smoke", "cd be && test -f ../fe/src/app.ts && test -f internal/a.go",
+                     "--owner-spec", "0000", "--mode", "read-only")
+        self.assertEqual(self.tracker("toolkit", "verify", "fe-drive")["result"]["failed"], [])  # be/main → ../../fe/main
+
+        self.tracker("init", f"specs/{FEATURE}.md")
+        self.handoff("parent")
+        self.tracker("requirement", "add", FEATURE, "--spec-ref", "Required behavior", "--verification", "API call")
+        self.create(FEATURE, "--repos", "be")  # this spec has no fe checkout
+        self.handoff("implementer")
+        self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "be/internal/**", "--parent-confirmed")
+        brief = self.tracker("brief", FEATURE, "--role", "implementer", "--parent-confirmed")["result"]
+        self.assertIn(f"cd be/{BRANCH} && cat ../../fe/main/src/app.ts", brief)
+        self.create(FEATURE, "--repos", "fe")
+        brief = self.tracker("brief", FEATURE, "--role", "implementer", "--parent-confirmed")["result"]
+        self.assertIn(f"cd be/{BRANCH} && cat ../../fe/{BRANCH}/src/app.ts", brief)
+
+
 class TestSlotTest(WorktreeCase):
     def to_tester(self, feature: str) -> None:
         self.feature = feature

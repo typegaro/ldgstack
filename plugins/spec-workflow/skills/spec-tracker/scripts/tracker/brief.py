@@ -33,7 +33,7 @@ def toolchain(root: Path, config: dict[str, Any] | None = None, branch: str | No
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise TrackerError("implementation/preflight.json is missing or malformed; create it with the user and run `spec preflight`") from error
     if config:
-        commands = [workspace.rewrite(config, command, branch or config["main"]) for command in commands]
+        commands = [workspace.rewrite(config, command, branch or config["main"], root) for command in commands]
     return "\n".join(f"  - {command}" for command in commands)
 
 

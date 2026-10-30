@@ -243,3 +243,7 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 ## Changes in 0.10.4
 
 - Fixes a 0.10.3 regression: sequential (non-parallel) batches end without a handoff again, so the next `brief --batch N+1` finds the lane; only executors with parallel siblings end with `join --assignment`.
+
+## Changes in 0.10.5
+
+- Worktree mode: commands that run inside one repo checkout and reach a sibling repo as `../<repo>` (e.g. `cd be && ... ../fe/tools/x.mjs`) now resolve to `../../<repo>/<branch>` when that repo has a checkout for the spec, else `../../<repo>/main`. Applies to briefs, `toolkit verify`, and `spec preflight`.

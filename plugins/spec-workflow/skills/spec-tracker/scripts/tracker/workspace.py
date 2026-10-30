@@ -63,10 +63,13 @@ def logical(config: dict[str, Any], relative: str) -> str:
     return relative if found is None else "/".join(part for part in (found[0], found[2]) if part)
 
 
-def rewrite(config: dict[str, Any], command: str, branch: str) -> str:
-    """Point `cd <repo>` (and `cd <repo>/sub`) at the `<repo>/<branch>` checkout."""
+def rewrite(config: dict[str, Any], command: str, branch: str, root: Path | None = None) -> str:
+    """Point `cd <repo>` (and `cd <repo>/sub`) at the `<repo>/<branch>` checkout, and a sibling `../<repo>` (used from inside a
+    checkout) at `../../<repo>/<branch>`, or `../../<repo>/<main>` when that repo has no checkout for the branch."""
     for repo in config["repos"]:
         command = re.sub(rf"(\bcd\s+){re.escape(repo)}(?=[/\s;&|)]|$)", rf"\g<1>{repo}/{branch}", command)
+        sibling = branch if root is None or (root / repo / branch).is_dir() else config["main"]
+        command = re.sub(rf"(?<![\w./-])\.\./{re.escape(repo)}(?=[/\s;&|)'\"]|$)", f"../../{repo}/{sibling}", command)
     return command
 
 

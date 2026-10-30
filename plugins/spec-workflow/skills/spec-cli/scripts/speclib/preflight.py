@@ -22,6 +22,7 @@ def on_main(root: Path, command: str) -> str:
         return command
     for repo in repos:
         command = re.sub(rf"(\bcd\s+){re.escape(repo)}(?=[/\s;&|)]|$)", rf"\g<1>{repo}/{main}", command)
+        command = re.sub(rf"(?<![\w./-])\.\./{re.escape(repo)}(?=[/\s;&|)'\"]|$)", f"../../{repo}/{main}", command)
     return command
 
 

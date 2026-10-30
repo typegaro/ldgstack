@@ -64,7 +64,7 @@ def localize(root: Path, command: str, branch: str | None = None) -> str:
         config = workspace.load(root)
     except workspace.WorkspaceError as error:
         raise TrackerError(str(error)) from error
-    return workspace.rewrite(config, command, branch or config["main"]) if config else command
+    return workspace.rewrite(config, command, branch or config["main"], root) if config else command
 
 
 def exists(root: Path, relative: PurePosixPath) -> bool:
