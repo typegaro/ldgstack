@@ -283,6 +283,58 @@ class ParallelExecutorTest(WorktreeCase):
         self.handoff("reviewer")
 
 
+TWO_LANES = """## Ownership
+- `be/internal/**`
+- `fe/src/**`
+
+## Findings
+- be/internal/a.go:1 is the store.
+
+## Batch 1: backend
+**Requirements:** REQ-001
+**Requires:** none
+**Files:** `be/internal/keys/store.go` (new), be/internal/a.go:12 (edit `Load`)
+**Change shapes:** mirrors fe/src/app.ts.
+
+## Batch 2: frontend
+**Requirements:** REQ-002
+**Requires:** none
+**Parallel:** yes
+**Files:**
+- fe/src/keys/panel.tsx (new)
+- fe/src/app.ts
+**Commands:** cd fe && npm test
+
+## Stop conditions
+- A listed file is missing.
+
+## Out of scope
+- Refactors.
+"""
+
+
+class BatchLaneTest(WorktreeCase):
+    def test_batches_claim_only_their_files_and_run_in_parallel(self) -> None:
+        self.tracker("init", f"specs/{FEATURE}.md")
+        self.handoff("parent")
+        for ref in ("R1", "R2"):
+            self.tracker("requirement", "add", FEATURE, "--spec-ref", ref, "--verification", "API call")
+        self.handoff("planner")
+        plan = self.root / "plan.md"
+        plan.write_text(TWO_LANES, encoding="utf-8")
+        self.tracker("plan", "add", FEATURE, "--from", str(plan))
+        self.handoff("parent")
+        self.create()
+        self.handoff("implementer")
+        first = self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "1", "--parent-confirmed")["result"]
+        self.assertEqual(first["paths"], ["be/internal/keys/store.go", "be/internal/a.go"])  # fe/src/app.ts is outside **Files:**
+        second = self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "2", "--parallel", "--parent-confirmed")["result"]
+        self.assertEqual(second["paths"], ["fe/src/keys/panel.tsx", "fe/src/app.ts"])
+        brief = self.tracker("brief", FEATURE, "--role", "implementer", "--batch", "2")["result"]
+        self.assertIn(f"Assignment: {second['assignment']}", brief)
+        self.assertIn("do not touch be/internal/a.go, be/internal/keys/store.go", brief)
+
+
 class FollowUpTest(WorktreeCase):
     def test_low_bugs_leave_the_gate(self) -> None:
         self.implement()

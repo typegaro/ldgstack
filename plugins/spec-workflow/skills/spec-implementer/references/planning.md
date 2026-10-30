@@ -45,7 +45,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 ## Ownership granularity
 
 - Own feature code by its directory (`be/internal/chat/**`). Own shared test infrastructure and other hot shared directories (test support and fixtures, `fe/tools/lib`, request/API helpers, registries) by file or narrow subdirectory: `fe/tests/support/request.ts`, `fe/tests/e2e/chat/**`, never `fe/tests/**` or `fe/tools/**`. A coarse lane makes `assign` refuse every parallel spec that touches one shared helper (pilot run: the 0062 fixer had to send patches through the parent).
-- List the exact shared files a batch edits under its `**Files:**`; `assign` then reports any overlap with another spec's lane precisely.
+- `**Files:**` lists exactly the files (or a directory glob for new packages) the batch edits or creates, one per entry, inside Ownership; files it only reads go under other labels. `assign --from-plan --batch N` gives the executor exactly these paths, so `--parallel` batches need disjoint `**Files:**`.
 
 ## Batches
 

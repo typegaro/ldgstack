@@ -395,6 +395,7 @@ A protocol driver (0055 `stt-drive`: WebSocket client with expectations) had to 
 ### 73. `assign --from-plan --batch N` claims the whole plan's ownership
 Assigning batches 3-8 of 0072 (all backend) claimed every fe file in the plan too, blocking a parallel fe lane of another spec; a rejected assign also left the brief reissuing the old lane. Scope `--from-plan --batch` to the selected batches' files, and make `brief` fail when the last `assign` was rejected.
 
+**Resolved (0.10.2):** `--from-plan --batch N` claims only the batch's `**Files:**` paths inside the ownership (backticks optional), falling back to the whole ownership with a warning; `--parallel` lanes are then usable. The rejected-assign brief part stays open.
 ### 74. Wording-only spec edits force an implementer round trip
 After `spec-sync` re-imported two requirements for a wording-only R1 edit (code unchanged), the parent could not re-mark them: `--evidence-from` rejects parent-recorded checks and checks from earlier generations. Allow the parent light path to reuse the latest passed check of the previous generation when the requirement text changed but no code did (with a reason).
 

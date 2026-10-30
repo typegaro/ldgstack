@@ -1151,6 +1151,14 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
             if latest_plan is None:
                 raise TrackerError(f"no plan stored for {args.feature}; `{tracker} plan add {args.feature} --from <file>` first")
             globs = list(latest_plan["ownership"])
+            if args.batch and args.role == "implementer":
+                # #73: a batch lane holds only the batch's files, so disjoint batches can run as --parallel executors.
+                lane = plans.batch_lane(latest_plan, args.batch)
+                if lane:
+                    globs = lane
+                else:
+                    print(f"warning: plan batch {args.batch} names no paths inside the ownership; assigned the whole ownership. "
+                          "List the batch's files under **Files:**.", file=sys.stderr)
             if args.role == "implementer":
                 record = load(root, args.feature)
                 override = early_gate(root, record, plan_batches(record, args.batch, False), args.parent_confirmed, args.user_decision, "assign")

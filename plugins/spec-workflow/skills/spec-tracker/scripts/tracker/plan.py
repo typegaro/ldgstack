@@ -138,6 +138,27 @@ def batch(plan: dict[str, Any], number: int) -> dict[str, Any]:
     raise TrackerError(f"plan v{plan['version']} has batches 1..{len(plan['batches'])}; no batch {number}")
 
 
+PATH = re.compile(r"(?<![\w/.:-])((?:[\w.-]+/)+[\w.*-]*[\w*])")
+FILES_SECTION = re.compile(r"\*\*Files:\*\*(.*?)(?=\n\s*(?:[-*]\s*)?\*\*[A-Z][\w ]*:\*\*|\Z)", re.S)
+
+
+def batch_lane(plan: dict[str, Any], number: int) -> list[str]:
+    """The paths batch `number` edits (#73): its `**Files:**` section (else the whole batch text), backticks optional,
+    `:line` suffixes dropped, and only paths inside the plan's ownership. Empty when the batch names none."""
+    text = batch(plan, number)["text"]
+    section = FILES_SECTION.search(text)
+    found = []
+    for raw in PATH.findall(section.group(1) if section else text):
+        candidate = re.sub(r":[0-9]+(?:-[0-9]+)?$", "", raw).rstrip("/")
+        try:
+            candidate = lanes.validate(candidate)
+        except ValueError:
+            continue
+        if any(lanes.matches([owner], candidate) or lanes.covers(owner, candidate) for owner in plan["ownership"]):
+            found.append(candidate)
+    return list(dict.fromkeys(found))
+
+
 def areas(record: dict[str, Any]) -> set[str]:
     """Top-level project areas a spec touches: the implementer lane, the plan's ownership, and changed files."""
     globs = [glob for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer"

@@ -230,3 +230,7 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 
 - Worktree mode: `toolkit verify` runs smokes in `<repo>/main` (`--feature F` for that spec's checkouts), briefs show toolkit commands in the spec's checkout, and `toolkit add|update --location <repo>/...` accepts a path that exists in any checkout.
 - `tracker abandon <feature> --reason --user-decision [--superseded-by ID]`: retire the record of a spec that is split or replaced before acceptance (kept in `implementation/abandoned/`, CLI-only); then `spec defer` it until the successor is accepted. Procedure: orchestrator procedures › Splitting or replacing an unaccepted spec.
+
+## Changes in 0.10.2
+
+- `assign --from-plan --batch N` claims only that batch's files: the paths under its `**Files:**` (else anywhere in the batch), backticks optional, `:line` dropped, kept only inside the plan's ownership; with none it falls back to the whole ownership and warns (#73). Disjoint batches can now run as `--parallel` executors without hand-written `--paths`.
