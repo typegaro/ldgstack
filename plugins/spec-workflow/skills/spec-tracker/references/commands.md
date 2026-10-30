@@ -34,7 +34,7 @@ Bug and blocker IDs are fully qualified (`BUG-<feature>-001`, `BLOCKER-<feature>
 Parent only:
 
 ```bash
-tracker requirement import 0000-project-bootstrap [--include-amended] [--parent-confirmed]
+tracker requirement import 0000-project-bootstrap [--exclude-amended] [--parent-confirmed]
 tracker requirement add 0000-project-bootstrap --spec-ref "0:R4" --verification "observable acceptance criterion" [--parent-confirmed]
 tracker requirement implemented|tested 0000-project-bootstrap REQ-004 --evidence "..." --evidence-from <check> --parent-confirmed
 tracker check add 0000-project-bootstrap --name lint ... --parent-confirmed
@@ -47,7 +47,7 @@ tracker spec-sync 0000-project-bootstrap --reason "..." --parent-confirmed
 tracker archive 0000-project-bootstrap --parent-confirmed
 ```
 
-`requirement import` adds one requirement per `- **R<n>**` bullet (continuation lines and nested items included, suffixed IDs like `R16a` kept) with `--spec-ref <id>:R<n>` and the Markdown-stripped text as verification. `--include-amended` also adds each older requirement a bullet cites after `replaces`, `amends`, or `removes` (`3:R11`, `22:R7, R9`, `9:R7-R9`). It is idempotent. After `spec-sync`, import reconciles changed verification text, retires removed imported requirements, and clears the pending state; the new implementation generation requires fresh implementation, review, and test evidence.
+`requirement import` adds one requirement per `- **R<n>**` bullet (continuation lines and nested items included, suffixed IDs like `R16a` kept) with `--spec-ref <id>:R<n>` and the Markdown-stripped text as verification. It also adds each older requirement a bullet cites after `replaces`, `amends`, or `removes` (`3:R11`, `22:R7, R9`, `9:R7-R9`); `--exclude-amended` skips those (spec-sync keeps the choice), `--include-amended` is an accepted no-op. It is idempotent. `spec-sync` re-imports itself: a requirement whose text changed, an amended target whose citing requirement changed, and a new requirement lose their implemented/tested marks (old evidence kept in `evidence_history`); unchanged ones keep theirs; removed ones retire. It reports `changed`, `added`, `retired`, keeps the generation and the plan, and marks the plan `stale` (shown in `status` and briefs, where `brief --batch N` still works with a warning) until a new `plan add`. Records with only hand-added requirements fall back to the old full invalidation plus `requirement import`.
 
 Lanes and briefs (parent):
 
@@ -56,6 +56,9 @@ tracker assign 0000-project-bootstrap --role implementer --paths 'be/internal/db
 tracker assign 0000-project-bootstrap --role tester --read-only --parent-confirmed
 tracker assign 0000-project-bootstrap --release --parent-confirmed
 tracker assign 0000-project-bootstrap --role implementer --from-plan [--batch N] --parent-confirmed   # the latest plan's ownership globs; early records also check the batch's Requires
+tracker assign 0001-ui --role fixer --paths fe/src/chat/** --carve 'fe/tests/support/**' --from ASSIGN-0000-project-bootstrap-003 --parent-confirmed   # narrow glob out of another spec's active lane
+tracker assign 0000-project-bootstrap --role toolsmith --paths 'tools/fault/**' --alongside --parent-confirmed   # beside an active fixer, disjoint lane
+tracker join 0000-project-bootstrap --completed "..."   # the side toolsmith's last command
 tracker brief 0000-project-bootstrap --role implementer [--batch N | --batch REQ-001..REQ-008 [--final-batch]] [--parent-confirmed [--user-decision "..."]] [--fresh]
 tracker brief 0000-project-bootstrap --role planner
 tracker claim ASSIGN-0000-project-bootstrap-001     # an agent's first command (from its brief)
@@ -88,6 +91,6 @@ tracker answer 0000-project-bootstrap --text "use be/y.go; same function" [--rep
 tracker handoff 0000-project-bootstrap --to implementer --completed "..." --remaining "..." --parent-confirmed --reason "one-line fix"   # no plan
 ```
 
-`brief --batch N` (a plan batch) carries only that batch's text and the ownership, and marks the last batch final. `brief --role implementer` refuses without a plan for more than 3 requirements or more than one area, and without `--batch` for more than 10 requirements, more than 2 areas, or a multi-batch plan; `--parent-confirmed` overrides both. Retest and fixer briefs list failed or `not_run` checks by exact name to re-record. `brief --fresh` releases the role's active assignment and issues a new one with the same paths (plan ownership if none), for a fresh agent on the next batch.
+`brief --batch N` (a plan batch) carries only that batch's text and the ownership, and marks the last batch final. `brief --role implementer` refuses without a plan for more than 3 requirements or more than one area, and without `--batch` for more than 10 requirements, more than 2 areas, or a multi-batch plan; `--parent-confirmed` overrides both. Retest and fixer briefs list failed or `not_run` checks by exact name to re-record. `brief --fresh` releases the role's active assignment and issues a new one with the same paths (plan ownership if none), for a fresh agent on the next batch. Without `--fresh`, `brief` does the same automatically when an agent already claimed the assignment (stderr warning). Each brief has a `First turn:` line: one parallel read of the spec, `requirement list`, and (implementer) the files the plan batch names.
 
 Requirements imported from a spec's `## Testability` section are flagged `testability`. Their `requirement implemented` evidence (including the light path) must name a registered toolkit tool whose smoke passed since its last change, plus its smoke check and `--help`, e.g. `--evidence "tool compute-fault (compute-fault crash --lease ID); --help documents it; smoke: toolkit verify compute-fault passed"`. The record stores the tool and its verification time.

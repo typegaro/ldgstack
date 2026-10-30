@@ -209,13 +209,135 @@ class RetroTest(unittest.TestCase):
         out = Path(self.temporary.name) / "out"
         self.run_retro("--label", "0.1.0", "--out-dir", str(out))
         self.assertTrue((out / "retro.md").read_text(encoding="utf-8").startswith("# Workflow retro: 0.1.0"))
-        report = self.report("--label", "0.2.0", "--compare", str(out / "retro.json"), "--large-tokens", "100000")
+        report = self.report("--label", "0.2.0", "--compare", str(out / "retro.json"), "--large-tokens", "100000", "--force")
         comparison = report["comparison"]
         self.assertEqual(comparison["against"], "0.1.0")
         self.assertIn("context.large-results", comparison["resolved_findings"])
         row = next(item for item in comparison["metrics"] if item["metric"] == "subagents.weighted_tokens")
         self.assertEqual((row["before"], row["after"], row["change"]), (row["before"], row["before"], "+0.0%"))
-        self.assertIn("## Comparison", self.run_retro("--compare", str(out / "retro.json")))
+        self.assertEqual(comparison["overlapping_sessions"], ["main-1"])
+        self.assertIn("Warning (--force)", self.run_retro("--compare", str(out / "retro.json"), "--force"))
+
+    def test_compare_refuses_overlap_and_accepts_disjoint_windows(self) -> None:
+        out = Path(self.temporary.name) / "out"
+        self.run_retro("--out-dir", str(out))
+        refused = subprocess.run([sys.executable, str(RETRO), "--project", str(self.project), "--transcripts", str(self.transcripts),
+                                  "--compare", str(out / "retro.json")], text=True, capture_output=True, check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("overlapping time", refused.stderr)
+        first, second = Path(self.temporary.name) / "w1", Path(self.temporary.name) / "w2"
+        self.run_retro("--until", "2026-10-22T16:00:30Z", "--out-dir", str(first))
+        early = json.loads((first / "retro.json").read_text(encoding="utf-8"))
+        late = self.report("--since", "2026-10-22T16:00:31Z", "--compare", str(first / "retro.json"))
+        # Subagent runs belong to the window they start in, so the two windows partition them.
+        self.assertEqual((early["totals"]["subagents"]["runs"], late["totals"]["subagents"]["runs"]), (2, 0))
+        self.assertNotIn("overlapping_sessions", late["comparison"])
+        whole = self.report()
+        self.assertEqual(early["totals"]["parent"]["api_calls"] + late["totals"]["parent"]["api_calls"], whole["totals"]["parent"]["api_calls"])
+
+
+class AttributionTest(unittest.TestCase):
+    """0.8.4 (#61): plugin-dev runs are reported apart; spec attribution prefers claims and tracker commands; only real features count."""
+
+    def test_plugin_dev_tagging_attribution_and_feature_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, transcripts = root / "project", root / "transcripts"
+            (project / "specs").mkdir(parents=True)
+            (project / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
+            for name in ("0001-demo", "0046-tree", "0047-file-viewer"):
+                (project / "specs" / f"{name}.md").write_text("# X\n\n- **R1** One.\n", encoding="utf-8")
+            main = Transcript()
+            main.prompt("go")
+            main.assistant("m1", [{"type": "text", "text": "ok"}], usage(1, 1, 1, 1), stop="end_turn")
+            main.write(transcripts / "main-1.jsonl")
+            source = "/home/u/Prj/ldgstack/plugins/spec-workflow"
+            tracker = f"python3 {source}/skills/spec-tracker/scripts/spec_tracker.py"
+            runs = {
+                "p1": ("general-purpose", "Plugin 0.8.0: spec parallelization", "Edit the planner.", []),
+                "p2": ("general-purpose", "Add toolsmith/test-toolkit", "Add a role.",
+                       [("Edit", {"file_path": f"{source}/agents/spec-toolsmith.md"})]),
+                "p3": ("general-purpose", "Build tools", "x", [("Bash", {"command": f"cat > {source}/x.py <<'EOF'\nEOF"})]),
+                "w1": ("spec-workflow:spec-implementer", "Implement 0001", "Record feature: 0001-demo",
+                       [("Bash", {"command": f"{tracker} status 0001-demo"})]),
+                "w2": ("spec-workflow:spec-planner", "Planner: 0047 file viewer", "Read specs/0046-tree.md and plan specs/0047-file-viewer.md", []),
+                "w3": ("spec-workflow:spec-fixer", "Fix 0046 bug", "Read specs/0046-tree.md",
+                       [("Bash", {"command": f"{tracker} claim ASSIGN-0047-file-viewer-002"})]),
+                "w4": ("spec-workflow:spec-tester", "Test", "x", [("Bash", {"command": f"{tracker} status 0001-demo; echo 5000-delta 9406-adb03112ce66 "
+                                                                                      "0050-b5-inspect-check-all 0047-era"})]),
+            }
+            for run_id, (agent_type, description, prompt, calls) in runs.items():
+                run = Transcript()
+                run.prompt(prompt)
+                for index, (tool, data) in enumerate(calls):
+                    run.assistant(f"{run_id}-{index}", [run.tool(f"{run_id}t{index}", tool, data)], usage(1, 1, 1, 1))
+                    run.result(f"{run_id}t{index}", "ok")
+                run.assistant(f"{run_id}-end", [{"type": "text", "text": "done"}], usage(1, 1, 1, 1), stop="end_turn")
+                run.write(transcripts / "main-1" / "subagents" / f"agent-{run_id}.jsonl")
+                (transcripts / "main-1" / "subagents" / f"agent-{run_id}.meta.json").write_text(
+                    json.dumps({"agentType": agent_type, "description": description}), encoding="utf-8")
+            process = subprocess.run([sys.executable, str(RETRO), "--project", str(project), "--transcripts", str(transcripts), "--json", "--conformance"],
+                                     text=True, capture_output=True, check=True)
+            report = json.loads(process.stdout)
+            measured = {item["id"]: item for item in report["runs"]}
+            self.assertEqual(sorted(key for key, item in measured.items() if item["plugin_dev"]), ["p1", "p2", "p3"])
+            self.assertEqual((report["totals"]["plugin_dev"]["runs"], report["totals"]["subagents"]["runs"]), (3, 4))
+            self.assertEqual({key: measured[key]["spec"] for key in ("w1", "w2", "w3", "w4")}, {"w1": 1, "w2": 47, "w3": 47, "w4": 1})
+            fresh = next(item for item in report["conformance"] if item["key"] == "verifiers.non-fresh")
+            self.assertEqual(fresh["violations"], 0)  # bogus NNNN-<slug> tokens are not specs
+
+
+class TimingTest(unittest.TestCase):
+    """0.8.4: active vs wall time, Bash time per category, tests.waiting, and shell failure classes (#61, #65)."""
+
+    def test_active_time_bash_categories_and_failure_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, transcripts = root / "project", root / "transcripts"
+            (project / "specs").mkdir(parents=True)
+            (project / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
+            main = Transcript()
+            main.prompt("go")
+            main.assistant("m1", [{"type": "text", "text": "ok"}], usage(1, 1, 1, 1), stop="end_turn")
+            main.write(transcripts / "main-1.jsonl")
+            run = Transcript()
+            run.prompt("Role: tester. Record feature: 0001-demo.")                                       # t=10
+            run.assistant("a1", [run.tool("b1", "Bash", {"command": "cd be && go test ./..."})], usage(1, 1, 1, 1))  # t=20
+            run.clock += 300
+            run.result("b1", "ok")                                                                         # t=330: test 310 s
+            run.assistant("a2", [run.tool("b2", "Bash", {"command": "go build ./..."})], usage(1, 1, 1, 1))  # t=340
+            run.result("b2", "ok")                                                                         # t=350: build 10 s
+            run.assistant("a3", [run.tool("b3", "Bash", {"command": "pkill -f 'next dev'"}),                 # t=360
+                                 run.tool("b4", "Bash", {"command": 'T="python3 tool.py"; $T --help'})], usage(1, 1, 1, 1))  # t=370
+            run.result("b3", "Exit code 144")                                                              # t=380
+            run.result("b4", "Exit code 127\nzsh: command not found: python3 tool.py")                    # t=390
+            run.assistant("a4", [run.tool("b5", "Bash", {"command": "cd be && gofmt -l ."})], usage(1, 1, 1, 1))  # t=400
+            run.result("b5", "Exit code 127\nzsh: command not found: gofmt")                              # t=410
+            run.assistant("a5", [{"type": "text", "text": "report"}], usage(1, 1, 1, 1), stop="end_turn")   # t=420
+            run.clock += 1000
+            run.text("continue")                                                                           # t=1430 (idle before it)
+            run.assistant("a6", [{"type": "text", "text": "done"}], usage(1, 1, 1, 1), stop="end_turn")     # t=1440
+            run.write(transcripts / "main-1" / "subagents" / "agent-t1.jsonl")
+            (transcripts / "main-1" / "subagents" / "agent-t1.meta.json").write_text(
+                json.dumps({"agentType": "spec-workflow:spec-tester", "description": "Test 0001"}), encoding="utf-8")
+            process = subprocess.run([sys.executable, str(RETRO), "--project", str(project), "--transcripts", str(transcripts), "--json"],
+                                     text=True, capture_output=True, check=True)
+            report = json.loads(process.stdout)
+            agent = next(item for item in report["runs"] if item["id"] == "t1")
+            # API: 10 + 10 + 20 (two blocks) + 10 + 10 + 10; tools per turn: 310 + 10 + 30 (parallel, counted once) + 10.
+            self.assertEqual((agent["api_seconds"], agent["tool_seconds"], agent["active_seconds"]), (70, 360, 430))
+            self.assertEqual(agent["wall_seconds"], 1430)
+            self.assertEqual(agent["bash_seconds"], {"build": 10, "lint": 10, "other": 40, "test": 310})
+            self.assertEqual(agent["bash_failure_classes"], {"missing-env-prefix": 1, "pkill-self-match": 1, "zsh-word-split": 1})
+            tester = next(item for item in report["by_role"] if item["role"] == "tester")
+            self.assertEqual((tester["active_seconds"], tester["test_build_seconds"], tester["wall_seconds"]), (430, 320, 1430))
+            keys = {item["key"]: item for item in report["findings"]}
+            self.assertEqual(keys["tests.waiting"]["frequency"], 1)
+            self.assertTrue(any("pkill -x" in line for line in keys["bash.failures"]["evidence"]))
+            text = subprocess.run([sys.executable, str(RETRO), "--project", str(project), "--transcripts", str(transcripts)],
+                                  text=True, capture_output=True, check=True).stdout
+            self.assertIn("| tester | 1 |", text)
+            self.assertIn("active s | test+build s |", text)
 
 
 if __name__ == "__main__":

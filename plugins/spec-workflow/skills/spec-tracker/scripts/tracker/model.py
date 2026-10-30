@@ -52,25 +52,30 @@ def in_current_generation(record: dict[str, Any], item: dict[str, Any]) -> bool:
     return int(item.get("generation", 1)) == generation(record)
 
 
+def invalidate_item(item: dict[str, Any], reason: str, invalidate_implementation: bool, next_generation: int | None = None) -> None:
+    """Clear a requirement's test (and optionally implementation) marks, keeping the old evidence in its history."""
+    if item.get("implemented") or item.get("tested") or item.get("parent_attested"):
+        item.setdefault("evidence_history", []).append({
+            "generation": int(item.get("implemented_generation", item.get("tested_generation", 1))),
+            "implementation": item.get("implementation", ""),
+            "implementation_evidence": item.get("implementation_evidence", ""),
+            "test_evidence": item.get("test_evidence", ""),
+            "reason": reason,
+            "invalidated_at": now(),
+        })
+    item.update(tested=False, test_evidence="")
+    if invalidate_implementation:
+        item.update(implemented=False, implementation_evidence="")
+        item.pop("implemented_generation", None)
+    elif item.get("implemented") and next_generation is not None:
+        item["implemented_generation"] = next_generation
+    item.pop("tested_generation", None)
+    item.pop("parent_attested", None)
+
+
 def invalidate_requirement_evidence(record: dict[str, Any], reason: str, invalidate_implementation: bool) -> None:
     for item in record.get("requirements", []):
-        if item.get("implemented") or item.get("tested") or item.get("parent_attested"):
-            item.setdefault("evidence_history", []).append({
-                "generation": int(item.get("implemented_generation", item.get("tested_generation", 1))),
-                "implementation": item.get("implementation", ""),
-                "implementation_evidence": item.get("implementation_evidence", ""),
-                "test_evidence": item.get("test_evidence", ""),
-                "reason": reason,
-                "invalidated_at": now(),
-            })
-        item.update(tested=False, test_evidence="")
-        if invalidate_implementation:
-            item.update(implemented=False, implementation_evidence="")
-            item.pop("implemented_generation", None)
-        elif item.get("implemented"):
-            item["implemented_generation"] = generation(record) + 1
-        item.pop("tested_generation", None)
-        item.pop("parent_attested", None)
+        invalidate_item(item, reason, invalidate_implementation, generation(record) + 1)
 
 
 def bump_generation(record: dict[str, Any], reason: str, invalidate_implementation: bool = False) -> int:
@@ -124,7 +129,8 @@ def find_item(record: dict[str, Any], collection: str, identifier: str) -> dict[
 
 
 def require_role(record: dict[str, Any], allowed: set[str]) -> None:
-    if record["current_role"] not in allowed:
+    # A side role (a toolsmith working alongside the fixer, `assign --alongside`) may run its own role's commands.
+    if record["current_role"] not in allowed and record.get("side_role") not in allowed:
         target = sorted(allowed)[0]
         raise TrackerError(
             f"operation requires role {', '.join(sorted(allowed))}; current role is {record['current_role']}. "
@@ -162,13 +168,13 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
     if not spec_matches(root, record):
         errors.append(f"specification hash changed (fix: `tracker spec-sync {feature} --reason \"...\" --parent-confirmed`)")
     if record.get("import_pending"):
-        errors.append(f"requirements not re-imported after spec-sync (fix: `tracker requirement import {feature} --include-amended --parent-confirmed`)")
+        errors.append(f"requirements not re-imported after spec-sync (fix: `tracker requirement import {feature} --parent-confirmed`)")
     if open_blockers(record):
         errors.append(f"specification blockers remain: {', '.join(item['id'] for item in open_blockers(record))}")
 
     requirements = record["requirements"]
     if not requirements:
-        errors.append(f"no requirements are tracked (fix: `tracker requirement import {feature} --include-amended`)")
+        errors.append(f"no requirements are tracked (fix: `tracker requirement import {feature}`)")
     elif any(not item["implemented"] for item in requirements):
         errors.append(f"requirements not implemented: {', '.join(item['id'] for item in requirements if not item['implemented'])}")
 

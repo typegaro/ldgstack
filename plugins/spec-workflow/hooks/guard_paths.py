@@ -151,11 +151,15 @@ def ownership_denial(root: Path, relative: str, event: dict) -> str | None:
         return None
     fix = f"ask the parent to widen it (`spec-tracker assign {own['feature']} --role {own['role']} --paths ... --parent-confirmed`) or report the file"
     problem = None
-    if not lanes.matches(own.get("paths") or [], relative):
+    carved = [entry for entry in own.get("carved") or [] if lanes.matches([entry["glob"]], relative)]
+    if carved:
+        problem = (f"{relative} was carved out of your assignment {own['id']} to {carved[0]['to']} ({carved[0]['feature']}); "
+                   "leave it to that agent or report the change to the parent.")
+    elif not lanes.matches(own.get("paths") or [], relative):
         allowed = ", ".join(own.get("paths") or []) or "none (read-only)"
         problem = f"{relative} is outside your assignment {own['id']} (allowed: {allowed}); {fix}."
     else:
-        clash = [item for item in active if item["id"] != own["id"] and lanes.matches(item.get("paths") or [], relative)]
+        clash = [item for item in active if item["id"] != own["id"] and lanes.owns(item, relative)]
         if clash:
             problem = f"{relative} is owned by {clash[0]['id']} ({clash[0]['feature']}, {clash[0]['role']}); {fix}."
     if problem is None:
@@ -182,7 +186,8 @@ def claim(event: dict, segment: list[str], cwd: Path) -> str | None:
         if not any(item.get("id") == assignment for item in lanes.active_assignments(root)):
             return f"unknown or released assignment {assignment}; ask the parent for a fresh brief (`spec-tracker brief <feature> --role <role>`)."
         if claimed_by_other(root, assignment, agent):
-            return f"assignment {assignment} is already claimed by another agent; ask the parent to `spec-tracker assign` a new one."
+            return (f"assignment {assignment} is already claimed by another agent; ask the parent for a new brief "
+                    "(`spec-tracker brief` reissues a claimed assignment with the same paths).")
         bind(root, agent, assignment)
     return None
 

@@ -16,6 +16,9 @@ READ_TOOLS = {"Read", "Grep", "Glob"}
 WORK_CATEGORIES = {"test", "lint", "build", "http", "inspect"}
 BOOKKEEPING_COMMANDS = {"tracker", "spec-cli", "read", "git"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+TIMED_CATEGORIES = ("test", "build", "lint")  # Bash wall time is reported for these, everything else is "other"
+PREFIXED = re.compile(r"\bdirenv exec\b|\bnix (develop|shell)\b|\bnix-shell\b")
+ZSH_SPLIT = re.compile(r"\b\w+=[\"'][^\"']*\s[^\"']*[\"']\s*(;|&&)\s*\$\w+")
 
 
 def seconds(start: str, end: str) -> int:
@@ -93,6 +96,7 @@ def run_metrics(run: Run, large_tokens: int, project: str = "", prices: dict[str
         "description": run.description, "spec": run.spec, "start": run.start, "end": run.end, "plugin_dev": run.plugin_dev,
         "models": models, "cost": sum(item["cost"] for item in models.values()),
         "wall_seconds": seconds(run.start, run.end) if run.start else 0,
+        **timing(run),
         "api_calls": run.api_calls, "tool_calls": len(calls),
         "tools": dict(sorted(Counter(call.name for call in calls).items())),
         "bash_categories": dict(sorted(categories.items())),
@@ -125,6 +129,7 @@ def run_metrics(run: Run, large_tokens: int, project: str = "", prices: dict[str
         ],
         "persisted_outputs": sum(1 for call in calls if call.persisted_kb),
         "cli_errors": dict(sorted(Counter(call.cli_error for call in calls if call.cli_error).items())),
+        "bash_failure_classes": dict(sorted(Counter(name for name in map(failure_class, failures) if name).items())),
         "api_errors": dict(sorted(run.api_errors.items())),
         "queued_messages": run.queued_messages,
         "notifications": list(run.notifications),
@@ -139,6 +144,33 @@ def run_metrics(run: Run, large_tokens: int, project: str = "", prices: dict[str
         "plugin_versions": sorted(run.plugin_versions),
         "reports_received": {"count": len(run.report_tokens), "tokens": sum(run.report_tokens), "max": max(run.report_tokens, default=0)},
     }
+
+
+def timing(run: Run) -> dict[str, Any]:
+    """Active time = API call durations (request to last response line) + tool time per turn (first tool_use to last
+    tool_result, so parallel calls count once). Idle gaps between resumes count only in wall_seconds."""
+    api = sum(seconds(start, end) for start, end in run.api_spans)
+    turns: dict[int, list[ToolCall]] = {}
+    for call in run.calls:
+        if call.started and call.finished:
+            turns.setdefault(call.position, []).append(call)
+    tools = sum(seconds(min(call.started for call in group), max(call.finished for call in group)) for group in turns.values())
+    bash: Counter = Counter(dict.fromkeys((*TIMED_CATEGORIES, "other"), 0))
+    for call in run.calls:
+        if call.name == "Bash" and call.started and call.finished:
+            bash[call.category if call.category in TIMED_CATEGORIES else "other"] += seconds(call.started, call.finished)
+    return {"active_seconds": api + tools, "api_seconds": api, "tool_seconds": tools, "bash_seconds": dict(sorted(bash.items()))}
+
+
+def failure_class(call: ToolCall) -> str | None:
+    """Known shell mistakes with a fix hint in the bash.failures finding (#61)."""
+    if call.exit_code == 144 and "pkill -f" in call.command:
+        return "pkill-self-match"
+    if call.exit_code == 127:
+        if ZSH_SPLIT.search(call.command):
+            return "zsh-word-split"
+        return "command-not-found" if PREFIXED.search(call.command) else "missing-env-prefix"
+    return None
 
 
 def rereads(run: Run) -> dict[str, int]:
@@ -206,6 +238,8 @@ def total(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "api_calls": sum(run["api_calls"] for run in runs),
         "tool_calls": sum(run["tool_calls"] for run in runs),
         "wall_seconds": sum(run["wall_seconds"] for run in runs),
+        "active_seconds": sum(run.get("active_seconds", 0) for run in runs),
+        "test_build_seconds": sum(test_build_seconds(run) for run in runs),
         "processed_tokens": sum(run["tokens"]["processed"] for run in runs),
         "weighted_tokens": sum(run["tokens"]["weighted"] for run in runs),
         "cost_units": sum(run.get("cost", 0) for run in runs),
@@ -213,6 +247,11 @@ def total(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "final_context_tokens": sum(run["tokens"]["final_context"] for run in runs),
         "cache_read_ratio": cache_ratio(runs),
     }
+
+
+def test_build_seconds(run: dict[str, Any]) -> int:
+    seconds_by = run.get("bash_seconds") or {}
+    return int(seconds_by.get("test", 0) + seconds_by.get("build", 0))
 
 
 def cache_ratio(runs: list[dict[str, Any]]) -> float:

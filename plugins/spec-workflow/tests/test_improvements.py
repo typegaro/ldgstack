@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_workflow import FEATURE, GUARD, PLUGIN, CliTestCase, spec_text
+from test_workflow import FEATURE, GUARD, PLUGIN, TRACKER, CliTestCase, spec_text
 
 M33 = Path(os.environ.get("SPEC_WORKFLOW_COMPAT_ROOT", Path.home() / "Prj" / "m33"))
 
@@ -87,6 +87,30 @@ class ReadyTest(CliTestCase):
         self.spec("validate", succeeds=False)
 
 
+PLAN_TWO_BATCHES = """## Ownership
+- `be/internal/**`
+
+## Findings
+- be/internal/a.go:1 starts here.
+
+## Batch 1: first
+**Requirements:** REQ-001, REQ-002, REQ-003
+**Requires:** none
+**Files:** `be/internal/a.go`
+
+## Batch 2: second
+**Requirements:** REQ-004, REQ-005, REQ-006
+**Requires:** none
+**Files:** `be/internal/b.go:12`, `be/internal/c_test.go`, `be/internal/**`
+
+## Stop conditions
+- A listed file is missing.
+
+## Out of scope
+- Refactors.
+"""
+
+
 class ImportTest(CliTestCase):
     feature = "0001-amendment"
 
@@ -101,17 +125,17 @@ class ImportTest(CliTestCase):
         return self.tracker("requirement", "list", self.feature)["result"]
 
     def test_import_parses_bullets_and_is_idempotent(self) -> None:
-        result = self.tracker("requirement", "import", self.feature)["result"]
+        result = self.tracker("requirement", "import", self.feature, "--exclude-amended")["result"]
         self.assertEqual(result["added"], ["REQ-001 1:R1", "REQ-002 1:R16a", "REQ-003 1:R2", "REQ-004 1:R3"])
         self.assertIn("1:R4 has no text; skipped", result["warnings"])
         listed = self.requirements()
         self.assertEqual(listed[0]["verification"], "[api] First line code and continuation with a link. - nested detail")
         self.assertEqual(listed[2]["verification"], "(replaces 0:R1) New behavior.")
 
-        again = self.tracker("requirement", "import", self.feature)["result"]
+        again = self.tracker("requirement", "import", self.feature, "--exclude-amended")["result"]
         self.assertEqual((again["added"], again["skipped"]), ([], ["1:R1", "1:R16a", "1:R2", "1:R3"]))
 
-        amended = self.tracker("requirement", "import", self.feature, "--include-amended")["result"]
+        amended = self.tracker("requirement", "import", self.feature)["result"]  # 0.8.4: amended targets by default (#62)
         self.assertEqual(amended["added"], ["REQ-005 0:R1", "REQ-006 0:R2"])
         self.assertIn("1:R3 references 0:R9, which was not found; skipped", amended["warnings"])
         listed = self.requirements()
@@ -132,29 +156,66 @@ class ImportTest(CliTestCase):
         path.write_text(path.read_text(encoding="utf-8") + "- **R5** Late addition.\n", encoding="utf-8")
         self.handoff("parent")
         self.assertIn("spec-sync", self.tracker("requirement", "import", self.feature, succeeds=False)["error"]["message"])
-        self.tracker("spec-sync", self.feature, "--reason", "draft edit", "--parent-confirmed")
-        self.assertEqual(self.tracker("requirement", "import", self.feature)["result"]["added"], ["REQ-005 1:R5"])
+        synced = self.tracker("spec-sync", self.feature, "--reason", "draft edit", "--parent-confirmed")["result"]
+        self.assertEqual(synced["added"], ["REQ-007 1:R5"])  # spec-sync re-imports itself (0.8.4)
+        self.assertEqual(self.tracker("requirement", "import", self.feature)["result"]["added"], [])
 
-    def test_spec_sync_reconciles_requirements_and_invalidates_evidence(self) -> None:
-        self.tracker("requirement", "import", self.feature)
+    def test_spec_sync_invalidates_only_changed_requirements(self) -> None:
+        self.tracker("requirement", "import", self.feature)  # REQ-001..004 own, REQ-005 0:R1 (cited by 1:R2), REQ-006 0:R2 (cited by 1:R3)
         self.tracker("handoff", self.feature, "--to", "implementer", "--completed", "work", "--remaining", "next",
                      "--parent-confirmed", "--reason", "reconciliation test")
-        self.tracker("requirement", "implemented", self.feature, "REQ-001", "--evidence", "old behavior")
+        for rid in ("REQ-001", "REQ-003", "REQ-004", "REQ-005", "REQ-006"):
+            self.tracker("requirement", "implemented", self.feature, rid, "--evidence", f"old {rid}")
         self.check("unit")
         self.handoff("parent")
         path = self.root / "specs" / "0001-amendment.md"
         changed = path.read_text(encoding="utf-8").replace("First line `code` and", "Changed contract and").replace(
-            "- **R16a** Suffixed requirement.\n", ""
-        )
-        path.write_text(changed, encoding="utf-8")
+            "- **R16a** Suffixed requirement.\n", "").replace("New behavior.", "Newer behavior.")
+        path.write_text(changed + "- **R9** Brand new.\n", encoding="utf-8")
         synced = self.tracker("spec-sync", self.feature, "--reason", "contract changed", "--parent-confirmed")["result"]
-        self.assertEqual((synced["generation"], synced["requirements"]["implemented"]), (2, 0))
-        imported = self.tracker("requirement", "import", self.feature)["result"]
-        self.assertIn("REQ-001 1:R1", imported["updated"])
-        self.assertIn("REQ-002 1:R16a", imported["retired"])
+        self.assertEqual(synced["generation"], 1)
+        self.assertEqual(synced["changed"], ["REQ-001 1:R1", "REQ-003 1:R2", "REQ-005 0:R1"])  # 0:R1 follows its citing 1:R2
+        self.assertEqual((synced["added"], synced["retired"]), (["REQ-007 1:R9"], ["REQ-002 1:R16a"]))
+        self.assertEqual(synced["pending"], [])
+        record = json.loads((self.root / "implementation" / "active" / f"{self.feature}.json").read_text(encoding="utf-8"))
+        marks = {item["id"]: (item["implemented"], item["implementation_evidence"]) for item in record["requirements"]}
+        self.assertEqual(marks["REQ-004"], (True, "old REQ-004"))
+        self.assertEqual(marks["REQ-006"], (True, "old REQ-006"))
+        self.assertEqual((marks["REQ-001"], marks["REQ-003"], marks["REQ-007"]), ((False, ""), (False, ""), (False, "")))
+        self.assertEqual(record["requirements"][0]["evidence_history"][-1]["implementation_evidence"], "old REQ-001")
+        self.assertEqual(record["specification"]["history"][-1]["changed"], synced["changed"])
+        self.assertEqual(self.tracker("requirement", "import", self.feature)["result"]["added"], [])
         listed = self.tracker("requirement", "list", self.feature)["result"]
         self.assertNotIn("1:R16a", {item["spec_ref"] for item in listed})
         self.assertEqual(listed[0]["verification"], "[api] Changed contract and continuation with a link. - nested detail")
+
+    def test_spec_sync_keeps_the_plan_and_marks_it_stale(self) -> None:
+        self.tracker("requirement", "import", self.feature)
+        self.handoff("planner")
+        plan = self.root / "plan.md"
+        plan.write_text(PLAN_TWO_BATCHES, encoding="utf-8")
+        self.tracker("plan", "add", self.feature, "--from", str(plan))
+        self.handoff("parent")
+        self.assertNotIn("plan_stale", self.tracker("status", self.feature)["result"])
+        path = self.root / "specs" / "0001-amendment.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("Suffixed requirement.", "Suffixed requirement, amended."), encoding="utf-8")
+        synced = self.tracker("spec-sync", self.feature, "--reason", "R16a amended", "--parent-confirmed")["result"]
+        self.assertEqual((synced["changed"], synced["plan_version"]), (["REQ-002 1:R16a"], 1))
+        self.assertIn("REQ-002 (batch 1)", synced["plan_stale"])
+        self.assertIn("plan_stale", self.tracker("status", self.feature)["result"])
+        (self.root / "implementation" / "preflight.json").write_text(json.dumps({"commands": ["true"]}), encoding="utf-8")
+        self.handoff("implementer")
+        self.tracker("assign", self.feature, "--role", "implementer", "--from-plan", "--parent-confirmed")
+        process = subprocess.run([sys.executable, str(TRACKER), "brief", self.feature, "--role", "implementer", "--batch", "2"],
+                                 cwd=self.root, text=True, capture_output=True, check=True)
+        self.assertIn("WARNING: plan v1 is stale", process.stdout)
+        self.assertIn("warning: plan v1 is stale", process.stderr)
+        self.assertIn("be/internal/b.go", process.stdout.split("First turn:", 1)[1].splitlines()[0])
+        self.handoff("parent")
+        self.handoff("planner")
+        self.tracker("plan", "add", self.feature, "--from", str(plan))
+        self.handoff("parent")
+        self.assertNotIn("plan_stale", self.tracker("status", self.feature)["result"])
 
 
 class RoleTest(CliTestCase):

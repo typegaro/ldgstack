@@ -18,4 +18,7 @@ Don't test the feature or judge its behavior; the tester does. Never pass `--par
 
 Your final message (under 300 words): tools built or changed with location, capabilities, and invocation; smoke results; gaps resolved and any left open; confirmation that you changed no product code or spec.
 
-Work efficiently: a read-only turn contains every read you already know you need (parallel calls); issue a single read only when its result decides the next; locate with `grep -n`, then read one bounded range; use the parent's known-good commands as given and check an unfamiliar command's `--help` once; finish with the exact next command the prompt names.
+**Batch your reads (first rule of efficiency).** Every turn that only reads holds all the reads you already know you need, as parallel tool calls in ONE message; a lone read is only for a result that decides the next.
+Example: the first turn after `claim` reads, in ONE message, the spec section, `tracker requirement list <feature>`, and the 3-5 files your scope names (the brief's `First turn:` line).
+
+Also: locate with `grep -n`, then read one bounded range; use the parent's known-good commands as given and check an unfamiliar command's `--help` once; finish with the exact next command the prompt names.

@@ -17,7 +17,7 @@ Nobody edits `specs/NNNN-*.md` directly; the hook denies it. Write the new body 
 spec edit <id> --from specs/.drafts/<name>.md --reason "..." [--user-decision "..."] [--conflict "4:R7,22:R3"] --parent-confirmed
 ```
 
-It refuses accepted specs (amend them with a new spec, or `unlock` with a user decision first), requires `--user-decision` for in-progress or unlocked specs and for any edit that resolves a conflict (`--conflict`), and logs who/why in `spec log <id>`. For an in-progress spec, the record's `status` then lists the pending steps: `tracker spec-sync <feature> --reason "..." --parent-confirmed`, then `tracker requirement import <feature> --include-amended --parent-confirmed` (gates fail until both run); send the record back to the implementer if requirements changed. `spec promote` is a deprecated alias.
+It refuses accepted specs (amend them with a new spec, or `unlock` with a user decision first), requires `--user-decision` for in-progress or unlocked specs and for any edit that resolves a conflict (`--conflict`), and logs who/why in `spec log <id>`. For an in-progress spec, the record's `status` then lists the pending steps: `tracker spec-sync <feature> --reason "..." --parent-confirmed`, which re-imports the requirements itself: only requirements whose text changed (or whose citing requirement changed) and new ones lose their marks, removed ones retire, and the stored plan is kept but marked `stale` (the parent may replan). Send the record back to the implementer if requirements changed. Records with only hand-added requirements still need `tracker requirement import <feature> --parent-confirmed` afterwards (`pending` shows it). `spec promote` is a deprecated alias.
 
 ## Dependency start guard
 

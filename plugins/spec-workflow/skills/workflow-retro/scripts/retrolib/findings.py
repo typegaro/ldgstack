@@ -21,6 +21,13 @@ CLI_SECTIONS = {
 LONG_CONTEXT = 250_000
 SPLIT_CALL_WEIGHT = 15_000  # weighted cost of one call at ~150k context
 LARGE_RESULT_CAP = 2_000
+TEST_WAIT_SHARE = 0.4  # tests.waiting: test+build Bash time above this share of a run's active time
+FAILURE_HINTS = {
+    "pkill-self-match": "exit 144: `pkill -f <pattern>` matched its own shell; use `pkill -x <name>`, a pid file, or `pgrep -f '[p]attern'`",
+    "missing-env-prefix": "exit 127: a tool (gofmt, jq, psql, ...) ran without the toolchain prefix (`direnv exec <repo>` / `nix develop -c`); use the brief's Toolchain lines",
+    "zsh-word-split": "exit 127: `T=\"python3 ...\"; $T` — zsh doesn't word-split variables; spell the command out",
+    "command-not-found": "exit 127 inside the toolchain prefix: the tool is missing from the environment; fix the flake or preflight",
+}
 
 
 def label(run: Metrics) -> str:
@@ -130,10 +137,14 @@ def bash_failures(runs: list[Metrics]) -> Finding | None:
     for run in runs:
         codes.update(run["bash"]["exit_codes"])
     retried = sum(run["bash"]["retried_after_failure"] for run in runs)
+    classes: Counter = Counter()
+    for run in runs:
+        classes.update(run.get("bash_failure_classes") or {})
+    hints = [f"{name} x{n}: {FAILURE_HINTS[name]}" for name, n in sorted(classes.items())]
     return finding(
         "bash.failures", "Shell commands fail and are retried", sum(value(run) for run in runs), count,
         "one extra API call per failure (run's mean call cost) + context carry of the failure output",
-        [f"{count} non-zero exits, {retried} identical retries", "exit codes: " + ", ".join(f"{code} x{n}" for code, n in sorted(codes.items())),
+        [f"{count} non-zero exits, {retried} identical retries", "exit codes: " + ", ".join(f"{code} x{n}" for code, n in sorted(codes.items())), *hints,
          "by role: " + ", ".join(f"{role} {value:,}" for role, value in by_role.most_common()), *top(runs, value)],
         ROLE_SKILL[main_role(by_role)], "2. Preparation",
         "Give agents the verified command prefix and a known-good invocation for build, test, and inspect commands in the "
@@ -270,7 +281,26 @@ def adhoc_tools(runs: list[Metrics]) -> Finding | None:
     )
 
 
-RULES = (batching, rereads, long_context, followups, bash_failures, skill_loads, large_results, early_stops, bookkeeping, adhoc_tools)
+def test_waiting(runs: list[Metrics]) -> Finding | None:
+    """Wall time, not tokens: runs whose test+build Bash time exceeds TEST_WAIT_SHARE of their active time (#65)."""
+    share = lambda run: run["bash_seconds"]["test"] + run["bash_seconds"]["build"]  # noqa: E731
+    waiting = [run for run in runs if run.get("active_seconds") and share(run) > TEST_WAIT_SHARE * run["active_seconds"]]
+    if not waiting:
+        return None
+    total = sum(share(run) for run in waiting)
+    return finding(
+        "tests.waiting", "Agents spend most of their active time waiting on tests and builds", 0, len(waiting),
+        f"wall time, not tokens: runs whose test+build Bash time exceeds {TEST_WAIT_SHARE:.0%} of active time (API + tool time); savings not estimated",
+        [f"{len(waiting)} runs, {total:,} s of test+build of {sum(run['active_seconds'] for run in waiting):,} s active",
+         *[f"{label(run)}: test {run['bash_seconds']['test']:,} s, build {run['bash_seconds']['build']:,} s of {run['active_seconds']:,} s active "
+           f"(wall {run['wall_seconds']:,} s)" for run in sorted(waiting, key=lambda run: (-share(run), run["id"]))[:4]]],
+        "skills/spec-orchestrator/SKILL.md", "Parallel scheduling / Parallel testing",
+        "Schedule a parallel-runner tooling spec (`test.runner`): parallel workers, a production build instead of a dev server for "
+        "e2e, and focused test commands per batch; agents run the full suite once before handoff.", "none",
+    )
+
+
+RULES = (batching, rereads, long_context, followups, bash_failures, skill_loads, large_results, early_stops, bookkeeping, adhoc_tools, test_waiting)
 
 
 def build(runs: list[Metrics], limit: int) -> list[Finding]:

@@ -20,9 +20,9 @@ def markdown(report: dict[str, Any]) -> str:
              f"Runs: {inputs['run_count']} from {len(inputs['sessions'])} session(s); window {inputs['since'] or 'start'} → {inputs['until'] or 'end'}.",
              "Weighted tokens = input + 1.25×cache write + 0.1×cache read + 5×output (relative cost, not dollars). "
              "Final context = Claude Code's `subagent_tokens`.", "", "## Totals", ""]
-    lines += table(["scope", "runs", "API calls", "tool calls", "processed", "weighted", "cost units", "final context", "cache read", "wall s"],
+    lines += table(["scope", "runs", "API calls", "tool calls", "processed", "weighted", "cost units", "final context", "cache read", "wall s", "active s"],
                    [[name, item["runs"], item["api_calls"], item["tool_calls"], item["processed_tokens"], item["weighted_tokens"], item.get("cost_units"),
-                     item["final_context_tokens"], item["cache_read_ratio"], item["wall_seconds"]] for name, item in totals.items()])
+                     item["final_context_tokens"], item["cache_read_ratio"], item["wall_seconds"], item.get("active_seconds")] for name, item in totals.items()])
     lines += ["", "## By model", "", f"Cost units = weighted × relative model price {report['inputs'].get('model_prices', {})}.", ""]
     lines += table(["model", "family", "price", "runs", "weighted", "cost units", "roles"],
                    [[item["model"], item["family"], item["price"], item["runs"], item["weighted_tokens"], item["cost_units"],
@@ -33,10 +33,12 @@ def markdown(report: dict[str, Any]) -> str:
                      item["weighted_tokens"], item["weighted_per_requirement"], item["final_context_tokens"],
                      ", ".join(f"{k} {v}" for k, v in ((item.get("record") or {}).get("bugs_by_finder") or {}).items()) or "—",
                      (item.get("record") or {}).get("reopens")] for item in report["by_spec"]])
-    lines += ["", "## By role", ""]
-    lines += table(["role", "runs", "mean weighted", "mean final context", "mean tool calls", "skill carry", "bash failures", "dup reads", "large results", "ad hoc scripts"],
+    lines += ["", "## By role", "", "Wall s spans first to last activity (idle time across resumes included); active s = API call time + tool time.", ""]
+    lines += table(["role", "runs", "mean weighted", "mean final context", "mean tool calls", "skill carry", "bash failures", "dup reads", "large results",
+                    "ad hoc scripts", "wall s", "active s", "test+build s"],
                    [[item["role"], item["runs"], item["mean_weighted_tokens"], item["mean_final_context"], item["mean_tool_calls"],
-                     item["skill_carry"], item["bash_failures"], item["duplicate_reads"], item["large_results"], item.get("adhoc_scripts", 0)] for item in report["by_role"]])
+                     item["skill_carry"], item["bash_failures"], item["duplicate_reads"], item["large_results"], item.get("adhoc_scripts", 0),
+                     item["wall_seconds"], item.get("active_seconds"), item.get("test_build_seconds")] for item in report["by_role"]])
     effect = report["effectiveness"]
     lines += ["", "## Effectiveness", "",
               f"- Bugs: {effect['bugs']} in {effect['records']} records; by finder: {effect['bugs_by_finder'] or 'none'}; by severity: {effect['bugs_by_severity'] or 'none'}.",
@@ -62,6 +64,8 @@ def markdown(report: dict[str, Any]) -> str:
     comparison = report.get("comparison")
     if comparison:
         lines += ["## Comparison", "", f"Against: {comparison['against'] or 'previous report'}", ""]
+        if comparison.get("overlapping_sessions"):
+            lines += [f"Warning (--force): both reports cover {', '.join(comparison['overlapping_sessions'])} over overlapping time; totals double-count.", ""]
         lines += table(["metric", "before", "after", "change"], [[row["metric"], row["before"], row["after"], row["change"]] for row in comparison["metrics"]])
         lines += ["", f"- New findings: {', '.join(comparison['new_findings']) or 'none'}",
                   f"- Resolved findings: {', '.join(comparison['resolved_findings']) or 'none'}", ""]

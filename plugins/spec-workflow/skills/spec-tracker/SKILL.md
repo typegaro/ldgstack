@@ -63,7 +63,15 @@ tracker answer <feature> --text "..." [--replan]   # parent
 tracker gate <feature> ready-test|acceptance
 tracker overlap [--depth N | --plans]            # --plans: planned/assigned globs that may select the same files
 tracker assign|brief|claim ...                  # lanes and generated delegation prompts (parent); brief --fresh renews the assignment
+tracker assign <feature> --role r --carve <glob> --from <ASSIGNMENT> [--paths ...] --parent-confirmed   # take a narrow glob from another spec's lane
+tracker spec-sync <feature> --reason "..." --parent-confirmed   # re-imports; invalidates only changed/new requirements; plan kept, marked stale
 ```
+
+**Claims.** `claim <assignment>` (an agent's first command) binds the agent to its lane; the hook refuses a second agent's claim. Every `brief` targets a new agent: when the role's active assignment is already claimed, `brief` reissues it (same paths, new ID, the old one released as `brief: claimed by an earlier agent`) and warns on stderr. This covers a finished agent and one that died at the usage limit. To continue the earlier agent instead, resume it with SendMessage and no new brief. `--fresh` forces a new assignment even when it is unclaimed.
+
+**Toolsmith alongside the fixer.** With open tool gaps while the record is with the fixer, `assign <feature> --role toolsmith --paths <disjoint globs> --alongside --parent-confirmed` keeps the fixer's lane and sets `side_role: toolsmith`. The side toolsmith may run toolsmith commands (`tool-gap resolve`, `toolkit add|verify`), and its brief's next command is `tracker join <feature> --completed "..."`, which releases its lane. Handoffs to the reviewer or tester wait for `join`. A plain `assign` for the fixer keeps the side lane; `assign --release` ends both.
+
+**Carve-outs.** `assign --carve <glob> --from <ASSIGNMENT>` moves a narrow glob, which must lie inside the other spec's lane, into the new assignment. The giving assignment records `carved` and the receiving one records `carved_from`. The hook treats the glob as outside the giving lane, and the giving role's brief shows `except <glob> (carved out to ...)`. An `assign` overlap error lists each overlapping pair, the narrowest existing non-overlapping globs, and the carve command when it applies.
 
 Bug, blocker, gap, and assignment IDs are fully qualified (`BUG-<feature>-001`); short forms (`BUG-001`) are accepted.
 

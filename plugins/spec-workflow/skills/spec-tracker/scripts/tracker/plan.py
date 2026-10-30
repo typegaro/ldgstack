@@ -112,6 +112,25 @@ def latest(record: dict[str, Any], any_generation: bool = False) -> dict[str, An
     return matching[-1] if matching else None
 
 
+def mark_stale(plan: dict[str, Any], requirement_ids: list[str], reason: str, at: str) -> None:
+    """spec-sync keeps the plan but flags the requirements it no longer matches (#62); a new `plan add` clears it."""
+    stale = plan.setdefault("stale", {"requirements": [], "reasons": []})
+    stale["requirements"] = list(dict.fromkeys(stale["requirements"] + requirement_ids))
+    stale["reasons"].append(reason)
+    stale["at"] = at
+
+
+def stale_text(plan: dict[str, Any] | None) -> str:
+    """'' for a current plan, else which requirements changed after planning and the batches they sit in."""
+    stale = (plan or {}).get("stale")
+    if not stale:
+        return ""
+    where = {rid: item["number"] for item in plan["batches"] for rid in item["requirements"]}
+    parts = [f"{rid} (batch {where[rid]})" if rid in where else f"{rid} (no batch)" for rid in stale["requirements"]]
+    return (f"plan v{plan['version']} is stale: spec-sync changed {', '.join(parts)} after planning; the spec's effective text wins "
+            "for those (replan if batches no longer fit)")
+
+
 def batch(plan: dict[str, Any], number: int) -> dict[str, Any]:
     for item in plan["batches"]:
         if item["number"] == number:

@@ -111,7 +111,7 @@ Rules that drifted as prose in the m33 run are now enforced in code (#20–#25):
 ## Changes in 0.2.0
 
 - `spec ready` and dependency-ordered `next`: a spec is ready when its `depends_on` and `amends` targets are accepted. Independent specs may run concurrently; `tracker overlap` reports shared changed files.
-- `requirement import [--include-amended]` derives the requirement list from `R<n>` bullets and cited older requirements.
+- `requirement import [--exclude-amended]` derives the requirement list from `R<n>` bullets and (by default) cited older requirements.
 - `not_run` blocks only acceptance. New `not_applicable` check result (non-blocking).
 - `implementer → tester` after a passed review, for parent-added requirements only. The parent may `requirement add/import` and `blocker resolve` in any role with `--parent-confirmed`.
 - Parent light path: `requirement implemented|tested --evidence-from <check>` and parent `check add`, shown as parent-attested.
@@ -147,3 +147,15 @@ The orchestrator prioritizes parallel work (user request 2026-10-27; also resolv
 - `tracker overlap --plans`: pairs of active records whose planned ownership globs or active lanes may select the same files, checked before launching parallel executors.
 - `init` leaves the record with the parent (status `new`); `handoff --to planner --parent-confirmed` also works while the executor has implemented nothing. Record schema stays v1; records written by 0.7.x keep working.
 - Orchestrator: "Parallel scheduling" section (plan ahead, early batches, pipelined roles, concurrency cap, per-agent scratch dirs, serialized tracker writes). Planner: `Requires` on every batch, independent batches first.
+
+## Changes in 0.8.4
+
+From the 0.8.3 m33 retro (#44, #46, #51, #62–#65).
+
+- `spec-sync` re-imports itself and invalidates only requirements whose text changed (amended targets follow their citing requirement) plus new ones; unchanged requirements keep marks and evidence. The plan is kept and marked `stale` (`status`, briefs); `brief --batch N` still works with a warning. `requirement import` includes amended targets by default (`--exclude-amended` opts out; `--include-amended` is a no-op).
+- `brief` reissues a role's assignment that an earlier agent already claimed (same paths, stderr warning), so a fresh agent can always claim its brief.
+- `assign` overlap errors list each overlapping pair, the narrowest existing non-overlapping globs, and a carve command; `assign --carve <glob> --from <ASSIGNMENT>` moves a narrow glob out of another spec's active lane (recorded on both, honored by the hook and the giving lane's brief). Planners own shared test infrastructure by file or narrow subdirectory.
+- Briefs carry a `First turn:` line (one parallel read: spec, `requirement list`, the batch's files); agent prompts open their efficiency section with a batching rule. The orchestrator gives each plan batch (or 2 small ones) to a fresh executor.
+- Tracker: `assign --role toolsmith --alongside` runs a toolsmith beside the active fixer on a disjoint lane; it ends with `tracker join`, and handoffs to review or test wait for it (#52).
+- workflow-retro: plugin-dev runs detected by description and plugin-source writes; spec attribution from claims and tracker commands first, and only existing `NNNN-<slug>` features; windows partition runs by start time, and `--compare` refuses overlapping reports without `--force` (#61).
+- workflow-retro: active time (API + tool time) beside wall time, Bash time per test/build/lint/other, a `tests.waiting` finding (test+build > 40% of active time), and exit-144 `pkill -f` / exit-127 missing-prefix and zsh word-split classes with fix hints.

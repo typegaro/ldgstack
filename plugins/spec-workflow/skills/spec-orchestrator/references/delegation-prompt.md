@@ -13,6 +13,7 @@ Plan: {plan}
 Decisions: {decisions}
 Assignment: {assignment}
 First command: {claim_command}
+First turn: {first_turn}
 Ownership: {ownership}
 Toolchain (verified by preflight; use exactly):
 {toolchain}
@@ -22,7 +23,8 @@ Toolkit (stale tools marked):
 Open tool gaps: {gaps}
 Next command: {next_command}
 Efficiency:
-  - A read-only turn contains every read you already know you need; issue a single read only when its result decides the next.
+  - Batch reads: one turn holds every read you already know you need (parallel tool calls); a lone read is only for a result that decides the next.
+  - Example: right after `claim`, ONE message reads the spec section, `requirement list`, and the 3-5 files your batch names (the First turn line).
   - Locate with grep -n, then read one bounded range; after an edit, re-read only the edited range.
   - Use the toolchain lines above as given; run `--help` once before any other unfamiliar command.
   - Write only inside Ownership; the hook denies other paths. Scratch files go in your scratchpad, never the project.

@@ -16,7 +16,7 @@ from tracker import plan as plans
 from tracker import requirements as spec_requirements
 from tracker.model import (
     BUG_TRANSITIONS, CHECK_RESULTS, HANDOFFS, ROLES, SEVERITIES,
-    bump_generation, find_item, gate_errors, generation, generation_has_work, latest_checks, next_id, not_run_checks, now,
+    bump_generation, find_item, gate_errors, generation, generation_has_work, invalidate_item, latest_checks, next_id, not_run_checks, now,
     open_blockers, open_questions, open_tool_gaps, parent_attested, parent_status, require_confirmation, require_role,
     review_skip_errors, spec_matches, touch,
 )
@@ -50,7 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--spec-ref", required=True)
     add.add_argument("--verification", required=True)
     imported = command(requirement, "import", confirmed=True, help="add one requirement per R<n> bullet of the spec")
-    imported.add_argument("--include-amended", action="store_true", help="also add requirements the spec replaces/amends/removes")
+    imported.add_argument("--include-amended", action="store_true", help="no-op: requirements the spec replaces/amends/removes are imported by default")
+    imported.add_argument("--exclude-amended", action="store_true", help="skip requirements the spec replaces/amends/removes (spec-sync keeps this choice)")
     command(requirement, "list")
     implemented = command(requirement, "implemented", item=True, confirmed=True)
     implemented.add_argument("--evidence", required=True)
@@ -155,12 +156,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     assign = command(commands, "assign", confirmed=True, help="set the paths the next agent for this record may edit (parent)")
     assign.add_argument("--role", choices=[role for role in ROLES if role != "parent"])
-    lane = assign.add_mutually_exclusive_group(required=True)
+    lane = assign.add_mutually_exclusive_group()
     lane.add_argument("--paths", nargs="+", metavar="GLOB", help="project-relative globs (** crosses directories)")
     lane.add_argument("--read-only", action="store_true", help="the agent may edit nothing in the project")
     lane.add_argument("--release", action="store_true", help="end this record's active assignment")
     lane.add_argument("--from-plan", action="store_true", help="use the latest plan's ownership globs")
     assign.add_argument("--batch", type=int, metavar="N", help="with --from-plan on an early record: the plan batch the lane is for")
+    assign.add_argument("--carve", action="append", metavar="GLOB", help="take this narrow glob out of another spec's active lane (--from) and grant it here (repeatable)")
+    assign.add_argument("--from", dest="carve_from", metavar="ASSIGNMENT", help="with --carve: the other spec's active assignment that gives up the glob")
+    assign.add_argument("--alongside", action="store_true",
+                        help="--role toolsmith while the fixer works: keep the fixer's lane (lanes must be disjoint); the toolsmith ends with `join`")
+    joined = command(commands, "join", help="end the side toolsmith's work alongside the fixer (the side agent's last command)")
+    joined.add_argument("--completed", required=True)
     assign.add_argument("--user-decision", help="early record: run a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
     commands.add_parser("claim", help="first command of a brief: binds this agent to its assignment (the hook records it)").add_argument("assignment")
     brief = command(commands, "brief", help="print the delegation prompt for the record's current role")
@@ -169,7 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--final-batch", action="store_true")
     brief.add_argument("--parent-confirmed", action="store_true", help="allow an unbatched or unplanned implementer brief")
     brief.add_argument("--user-decision", help="early record: brief a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
-    brief.add_argument("--fresh", action="store_true", help="release the role's active assignment and issue a new one (same paths) for a fresh agent")
+    brief.add_argument("--fresh", action="store_true", help="release the role's active assignment and issue a new one (same paths) for a fresh agent; "
+                       "automatic when an agent already claimed it")
 
     gate_parser = commands.add_parser("gate", help="gate <feature> ready-test|acceptance")
     gate_parser.add_argument("first", metavar="feature")
@@ -214,6 +222,7 @@ def summary(record: Record, root: Path | None = None) -> Record:
     return {
         **early,
         "feature": record["feature"], "status": record["status"], "current_role": record["current_role"],
+        **({"side_role": record["side_role"]} if record.get("side_role") else {}),
         "generation": generation(record),
         "requirements": {
             "total": len(requirements),
@@ -224,6 +233,7 @@ def summary(record: Record, root: Path | None = None) -> Record:
         "open_blockers": len(open_blockers(record)), "open_tool_gaps": len(open_tool_gaps(record)),
         "open_questions": [f"{item['id']} ({item['role']}): {item['text']}" for item in open_questions(record)],
         "plan_version": (plans.latest(record) or {}).get("version"),
+        **({"plan_stale": plans.stale_text(plans.latest(record))} if plans.stale_text(plans.latest(record)) else {}),
         "checks_not_run": not_run_checks(record), "pending": pending_steps(record, root),
         "updated_at": record["updated_at"],
     }
@@ -235,7 +245,7 @@ def pending_steps(record: Record, root: Path | None) -> list[str]:
     if root is not None and (root / record["specification"]["path"]).is_file() and not spec_matches(root, record):
         steps.append(f"tracker spec-sync {record['feature']} --reason \"...\" --parent-confirmed")
     if record.get("import_pending"):
-        steps.append(f"tracker requirement import {record['feature']} --include-amended --parent-confirmed")
+        steps.append(f"tracker requirement import {record['feature']} --parent-confirmed")
     return steps
 
 
@@ -396,7 +406,8 @@ def spec_files(root: Path) -> dict[int, Path]:
     return found
 
 
-def import_candidates(root: Path, record: Record, include_amended: bool) -> tuple[list[tuple[str, str]], list[str]]:
+def import_candidates(root: Path, record: Record, include_amended: bool) -> tuple[list[tuple[str, str]], dict[str, str], list[str]]:
+    """(spec_ref, verification text) per requirement, the citing requirement of each amended target, and warnings."""
     path = root / record["specification"]["path"]
     number = spec_requirements.spec_number(path)
     if number is None:
@@ -409,8 +420,9 @@ def import_candidates(root: Path, record: Record, include_amended: bool) -> tupl
             warnings.append(f"duplicate requirement ID {number}:R{item.id}")
         seen.add(item.id)
     candidates = [(f"{number}:R{item.id}", item.text) for item in parsed if item.text]
+    sources: dict[str, str] = {}
     if not include_amended:
-        return candidates, warnings
+        return candidates, sources, warnings
     files = spec_files(root)
     texts: dict[int, dict[str, str]] = {}
     for item in parsed:
@@ -426,64 +438,79 @@ def import_candidates(root: Path, record: Record, include_amended: bool) -> tupl
                 continue
             verification = AMENDED_VERIFICATION[reference.verb].format(source=f"{number}:R{item.id}")
             candidates.append((reference.ref, f"{verification} Original: {original}"))
-    return candidates, warnings
+            sources.setdefault(reference.ref, f"{number}:R{item.id}")
+    return candidates, sources, warnings
+
+
+def reconcile(root: Path, record: Record, include_amended: bool, sync: str | None = None) -> Record:
+    """Bring the record's imported requirements in line with the spec. On spec-sync (`sync` = reason), requirements whose
+    text changed (or whose citing requirement changed) lose their marks; unchanged ones keep marks and evidence (#44)."""
+    result: Record = {"added": [], "updated": [], "changed": [], "retired": [], "skipped": [], "warnings": []}
+    candidates, sources, warnings = import_candidates(root, record, include_amended)
+    result["warnings"].extend(warnings)
+    candidate_map = dict(candidates)
+    existing = {item["spec_ref"]: item for item in record["requirements"]}
+    current_spec = spec_requirements.spec_number(root / record["specification"]["path"])
+    if current_spec is None:
+        raise TrackerError("cannot reconcile requirements without a numbered specification")
+    if record.get("import_pending") or sync:
+        kept = []
+        for item in record["requirements"]:
+            structured = re.match(r"^([0-9]+):R", item["spec_ref"])
+            imported = item.get("origin") == "imported" or (item.get("origin") is None and structured is not None)
+            belongs = item.get("origin_spec") == current_spec or (structured is not None and int(structured.group(1)) == current_spec)
+            in_scope = imported and (belongs or include_amended)
+            if in_scope and item["spec_ref"] not in candidate_map:
+                item.update(retired_at=now(), retired_generation=generation(record), retirement_reason="removed from effective specification")
+                record.setdefault("retired_requirements", []).append(item)
+                result["retired"].append(item["id"] + " " + item["spec_ref"])
+            else:
+                kept.append(item)
+        record["requirements"] = kept
+        existing = {item["spec_ref"]: item for item in kept}
+    spec_text = (root / record["specification"]["path"]).read_text(encoding="utf-8")
+    testable = {f"{current_spec}:R{rid}" for rid in spec_requirements.testability_ids(spec_text)}
+    changed_refs = {ref for ref, text in candidates if ref in existing and existing[ref]["verification"] != text}
+    for spec_ref, verification in candidates:
+        if spec_ref in existing:
+            existing[spec_ref]["testability"] = spec_ref in testable
+            item = existing[spec_ref]
+            if item["verification"] != verification:
+                item["verification"] = verification
+                result["updated"].append(item["id"] + " " + spec_ref)
+            if sync and (spec_ref in changed_refs or sources.get(spec_ref) in changed_refs):
+                invalidate_item(item, f"specification changed: {sync}", invalidate_implementation=True)
+                result["changed"].append(item["id"] + " " + spec_ref)
+            item.update(origin="imported", origin_spec=current_spec)
+            result["skipped"].append(spec_ref)
+            continue
+        item = new_requirement(record, spec_ref, verification, "imported", current_spec)
+        item["testability"] = spec_ref in testable
+        record["requirements"].append(item)
+        existing[spec_ref] = item
+        result["added"].append(f"{item['id']} {spec_ref}")
+    record.pop("import_pending", None)
+    return result
 
 
 def import_requirements(root: Path, args: argparse.Namespace) -> Record:
-    added: list[str] = []
-    skipped: list[str] = []
-    updated: list[str] = []
-    retired: list[str] = []
-    warnings: list[str] = []
+    found: Record = {}
 
     def change(record: Record) -> None:
         if not spec_matches(root, record):
             raise TrackerError("specification hash changed; run spec-sync before importing")
         if record["current_role"] != "parent":
             require_confirmation(args.parent_confirmed, f"importing requirements while the record is with the {record['current_role']}")
-        candidates, found_warnings = import_candidates(root, record, args.include_amended)
-        warnings.extend(found_warnings)
-        candidate_map = dict(candidates)
-        existing = {item["spec_ref"]: item for item in record["requirements"]}
-        current_spec = spec_requirements.spec_number(root / record["specification"]["path"])
-        if current_spec is None:
-            raise TrackerError("cannot reconcile requirements without a numbered specification")
-        if record.get("import_pending"):
-            kept = []
-            for item in record["requirements"]:
-                structured = re.match(r"^([0-9]+):R", item["spec_ref"])
-                imported = item.get("origin") == "imported" or (item.get("origin") is None and structured is not None)
-                belongs = item.get("origin_spec") == current_spec or (structured is not None and int(structured.group(1)) == current_spec)
-                in_scope = imported and (belongs or args.include_amended)
-                if in_scope and item["spec_ref"] not in candidate_map:
-                    item.update(retired_at=now(), retired_generation=generation(record), retirement_reason="removed from effective specification")
-                    record.setdefault("retired_requirements", []).append(item)
-                    retired.append(item["id"] + " " + item["spec_ref"])
-                else:
-                    kept.append(item)
-            record["requirements"] = kept
-            existing = {item["spec_ref"]: item for item in kept}
-        spec_text = (root / record["specification"]["path"]).read_text(encoding="utf-8")
-        testable = {f"{current_spec}:R{rid}" for rid in spec_requirements.testability_ids(spec_text)}
-        for spec_ref, verification in candidates:
-            if spec_ref in existing:
-                existing[spec_ref]["testability"] = spec_ref in testable
-                item = existing[spec_ref]
-                if item["verification"] != verification:
-                    item["verification"] = verification
-                    updated.append(item["id"] + " " + spec_ref)
-                item.update(origin="imported", origin_spec=current_spec)
-                skipped.append(spec_ref)
-                continue
-            item = new_requirement(record, spec_ref, verification, "imported", current_spec)
-            item["testability"] = spec_ref in testable
-            record["requirements"].append(item)
-            existing[spec_ref] = item
-            added.append(f"{item['id']} {spec_ref}")
-        record.pop("import_pending", None)
+        # Amended targets are imported by default (#62), so a later spec-sync never pulls them in mid-run.
+        if args.exclude_amended:
+            record["exclude_amended"] = True
+        else:
+            record.pop("exclude_amended", None)
+        found.update(reconcile(root, record, not args.exclude_amended))
+        found.pop("changed")
 
     result = edit(root, args.feature, parent_roles(args.parent_confirmed), change)
-    return {**result, "added": added, "updated": updated, "retired": retired, "skipped": skipped, "warnings": warnings}
+    return {**result, **found}
 
 
 def changed_file(root: Path, args: argparse.Namespace) -> Record:
@@ -718,6 +745,9 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
         if args.question:
             ask(record, args)
             return
+        if record.get("side_role") and target != "parent":
+            raise TrackerError(f"the {record['side_role']} still works alongside the {source}; it runs "
+                               f"`tracker join {record['feature']} --completed \"...\"` first (joined before review and retest)")
         if source == "planner" and not plans.latest(record):
             raise TrackerError(f"no plan stored; run `tracker plan add {record['feature']} --from - <<'PLAN' ... PLAN` first")
         review_skipped = source == "implementer" and target == "tester"
@@ -902,21 +932,39 @@ def spec_check(root: Path, args: argparse.Namespace) -> Record:
     return {"feature": record["feature"], "specification_unchanged": True}
 
 
+def imported_requirements(record: Record) -> bool:
+    return any(item.get("origin") == "imported" for item in record["requirements"])
+
+
 def spec_sync(root: Path, args: argparse.Namespace) -> Record:
+    found: Record = {}
+
     def change(record: Record) -> None:
         require_confirmation(args.parent_confirmed, "spec-sync")
         specification = record["specification"]
         current = digest(root / specification["path"])
         if current == specification["sha256"]:
             raise TrackerError("specification is unchanged; nothing to sync")
-        specification.setdefault("history", []).append(
-            {"previous_sha256": specification["sha256"], "sha256": current, "reason": args.reason, "at": now()}
-        )
+        entry = {"previous_sha256": specification["sha256"], "sha256": current, "reason": args.reason, "at": now()}
+        specification.setdefault("history", []).append(entry)
         specification["sha256"] = current
-        record["import_pending"] = True
-        bump_generation(record, f"specification changed: {args.reason}", invalidate_implementation=True)
+        if not imported_requirements(record) or record.get("import_pending"):
+            # Hand-added requirements can't be diffed against the spec: invalidate everything, then `requirement import`.
+            record["import_pending"] = True
+            bump_generation(record, f"specification changed: {args.reason}", invalidate_implementation=True)
+            return
+        found.update(reconcile(root, record, not record.get("exclude_amended"), sync=args.reason))
+        entry.update(changed=found["changed"], added=found["added"], retired=found["retired"])
+        touched = [line.split(" ", 1)[0] for line in found["changed"] + found["added"] + found["retired"]]
+        plan = plans.latest(record, any_generation=True)
+        if plan and touched:
+            plans.mark_stale(plan, touched, args.reason, now())
+        if record["current_role"] == "parent":
+            record["status"] = parent_status(root, record)
+        found.pop("updated")
+        found.pop("skipped")
 
-    return edit(root, args.feature, {"parent"}, change)
+    return {**edit(root, args.feature, {"parent"}, change), **found}
 
 
 def archive(root: Path, args: argparse.Namespace) -> Record:
@@ -980,10 +1028,29 @@ def plan_batches(record: Record, number: int | None, whole: bool) -> list[Record
     return [plan["batches"][0]] if whole and len(plan["batches"]) == 1 else [None] if whole else list(plan["batches"])
 
 
+def overlap_error(root: Path, clashes: list[tuple[str, Record, str]], feature: str, role: str, tracker: str) -> TrackerError:
+    """Name every overlapping pair, the narrowest non-overlapping globs that exist on disk, and a carve-out (#64)."""
+    taken = sorted({glob for other in lanes.active_assignments(root) if other["feature"] != feature for glob in other.get("paths") or []})
+    lines = [f"{ours} overlaps {theirs} in {other['id']} ({other['feature']}, {other['role']})" for ours, other, theirs in clashes]
+    for ours in dict.fromkeys(ours for ours, _, _ in clashes):
+        narrow = lanes.narrower(root, ours, taken)
+        if narrow:
+            lines.append(f"non-overlapping globs under {ours}: {' '.join(narrow)}")
+    for ours, other, theirs in clashes:
+        if lanes.covers(theirs, ours):
+            lines.append(f"or take {ours} from {other['id']}: `{tracker} assign {feature} --role {role} --carve {ours} --from {other['id']} --parent-confirmed`")
+    return TrackerError("paths overlap another active lane: " + "; ".join(dict.fromkeys(lines))
+                        + f"; narrow --paths, or finish that spec first (`{tracker} assign <feature> --release --parent-confirmed`)")
+
+
 def assign(root: Path, args: argparse.Namespace) -> Record:
     tracker = "spec-tracker"
+    if not (args.paths or args.read_only or args.release or args.from_plan or args.carve):
+        raise TrackerError("one of --paths, --read-only, --release, --from-plan, or --carve is required")
     if not args.release and not args.role:
         raise TrackerError(f"--role is required; e.g. `{tracker} assign {args.feature} --role implementer --paths be/internal/chat/** --parent-confirmed`")
+    if bool(args.carve) != bool(args.carve_from) or (args.carve and (args.read_only or args.release)):
+        raise TrackerError("--carve GLOB needs --from ASSIGNMENT (the other spec's active lane) and grants paths, so not with --read-only or --release")
     override = None
     try:
         if args.from_plan:
@@ -996,9 +1063,11 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
                 record = load(root, args.feature)
                 override = early_gate(root, record, plan_batches(record, args.batch, False), args.parent_confirmed, args.user_decision, "assign")
         else:
-            globs = [] if args.release or args.read_only else [lanes.validate(item) for item in args.paths]
+            globs = [lanes.validate(item) for item in args.paths or []]
+        carves = [lanes.validate(item) for item in args.carve or []]
     except ValueError as error:
         raise TrackerError(str(error)) from error
+    globs = list(dict.fromkeys(globs + carves))
     result: dict[str, Any] = {}
 
     def change(record: Record) -> None:
@@ -1006,24 +1075,84 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
         if override:
             record.setdefault("dependency_overrides", []).append(override)
         items = record.setdefault("assignments", [])
+        side = record.get("side_role")
+        if args.alongside:
+            alongside_guard(record, args.role)
         for item in items:
-            if item["status"] == "active":
+            # The side lane survives a reassignment of the main role (and vice versa with --alongside); --release ends both.
+            keep = not args.release and (args.alongside or (side and item["role"] == side))
+            if item["status"] == "active" and not keep:
                 item.update(status="released", released_at=now())
         if args.release:
+            record.pop("side_role", None)
             return
+        others = [other for other in lanes.active_assignments(root) if other["feature"] != record["feature"]]
+        if args.alongside:
+            mine = [item for item in items if item["status"] == "active"]
+            shared = [f"{ours} overlaps {theirs} ({item['id']})" for item in mine for ours, theirs in lanes.overlap(globs, item.get("paths") or [])]
+            if shared:
+                raise TrackerError("--alongside needs a lane disjoint from the fixer's: " + "; ".join(shared))
+            record["side_role"] = args.role
+        source = None
+        if carves:
+            source = next((other for other in others if other["id"] == args.carve_from), None)
+            if source is None:
+                raise TrackerError(f"--from {args.carve_from} is not another spec's active assignment")
+            wide = [glob for glob in carves if not any(lanes.covers(path, glob) for path in source.get("paths") or [])]
+            if wide:
+                raise TrackerError(f"--carve {', '.join(wide)} is not inside {source['id']}'s lane ({', '.join(source.get('paths') or [])}); carve a narrower glob")
         clashes = [
-            f"{glob} overlaps {other['id']} ({other['feature']}: {theirs})"
-            for other in lanes.active_assignments(root) if other["feature"] != record["feature"]
-            for glob, theirs in lanes.overlap(globs, other.get("paths") or [])
+            (ours, other, theirs) for other in others for ours, theirs in lanes.lane_overlap(globs, other)
+            if not (other is source and any(lanes.covers(glob, ours) for glob in carves))
         ]
         if clashes:
-            raise TrackerError("paths overlap another active lane: " + "; ".join(clashes)
-                               + f"; narrow --paths, or finish that spec first (`{tracker} assign <feature> --release --parent-confirmed`)")
-        item = {"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": globs, "status": "active", "at": now()}
+            raise overlap_error(root, clashes, record["feature"], args.role, tracker)
+        item = {"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": globs, "status": "active", "at": now(),
+                **({"alongside": True} if args.alongside else {})}
+        if source is not None:
+            item["carved_from"] = [{"glob": glob, "from": source["id"], "feature": source["feature"]} for glob in carves]
+            carve(root, source, carves, item["id"], record["feature"])
         items.append(item)
         result.update(assignment=item["id"], role=args.role, paths=globs, claim=f"{tracker} claim {item['id']}")
+        if source is not None:
+            result["carved"] = f"{', '.join(carves)} from {source['id']} ({source['feature']}); its agent's writes there now warn"
 
     return {**edit(root, args.feature, set(ROLES), change), **result}
+
+
+def alongside_guard(record: Record, role: str) -> None:
+    """#52: the toolsmith may build tools for open gaps while the fixer fixes bugs, on a disjoint lane."""
+    if role != "toolsmith" or record["current_role"] != "fixer":
+        raise TrackerError("--alongside runs a toolsmith beside an active fixer: the record must be with the fixer and --role toolsmith")
+    if not open_tool_gaps(record):
+        raise TrackerError("no open tool gaps for a toolsmith")
+    if record.get("side_role"):
+        raise TrackerError(f"a {record['side_role']} already works alongside; it runs `join` first")
+
+
+def join(root: Path, args: argparse.Namespace) -> Record:
+    """The side toolsmith's last command: release its lane and log what it built; the fixer's handoff then proceeds."""
+    def change(record: Record) -> None:
+        side = record.get("side_role")
+        if not side:
+            raise TrackerError("no side role is working alongside; use `handoff`")
+        for item in record.get("assignments", []):
+            if item["status"] == "active" and item["role"] == side:
+                item.update(status="released", released_at=now(), released_by="join")
+        record.setdefault("side_handoffs", []).append({"role": side, "completed": args.completed, "at": now(),
+                                                       "open_tool_gaps": [item["id"] for item in open_tool_gaps(record)]})
+        record.pop("side_role")
+
+    return edit(root, args.feature, set(ROLES), change)
+
+
+def carve(root: Path, source: Record, globs: list[str], target: str, feature: str) -> None:
+    """Record the carve-out on the giving lane; the hook and its brief then exclude those globs."""
+    record = load(root, source["feature"])
+    item = next(entry for entry in record.get("assignments", []) if entry["id"] == source["id"])
+    item.setdefault("carved", []).extend({"glob": glob, "to": target, "feature": feature, "at": now()} for glob in globs)
+    touch(record)
+    save(root, record)
 
 
 def claim_assignment(root: Path, args: argparse.Namespace) -> Record:
@@ -1034,16 +1163,19 @@ def claim_assignment(root: Path, args: argparse.Namespace) -> Record:
     raise TrackerError(f"unknown or released assignment {args.assignment}; ask the parent for a fresh brief")
 
 
-def fresh_assignment(root: Path, args: argparse.Namespace) -> None:
+def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief --fresh") -> None:
     """A fresh agent (e.g. the next batch's executor) gets its own assignment: same paths, new ID to claim."""
     def change(record: Record) -> None:
-        if record["current_role"] != args.role:
+        if args.role not in (record["current_role"], record.get("side_role")):
             raise TrackerError(f"the record is with the {record['current_role']}; run `handoff {record['feature']} --to {args.role} ...` first")
         items = record.setdefault("assignments", [])
         active = [item for item in items if item["status"] == "active" and item["role"] == args.role]
         latest_plan = plans.latest(record)
+        carved: list[Record] = []
         if active:
             paths = list(active[-1]["paths"])
+            live = {item["id"] for item in lanes.active_assignments(root)}
+            carved = [entry for entry in active[-1].get("carved", []) if entry["to"] in live]
         elif args.role in ("implementer", "fixer") and latest_plan:
             paths = list(latest_plan["ownership"])
         elif args.role in READ_ONLY_ROLES or args.role == "reviewer":
@@ -1051,8 +1183,9 @@ def fresh_assignment(root: Path, args: argparse.Namespace) -> None:
         else:
             raise TrackerError(f"no {args.role} assignment to renew; run `spec-tracker assign {record['feature']} --role {args.role} --paths ... --parent-confirmed`")
         for item in active:
-            item.update(status="released", released_at=now(), released_by="brief --fresh")
-        items.append({"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": paths, "status": "active", "at": now(), "fresh": True})
+            item.update(status="released", released_at=now(), released_by=reason)
+        items.append({"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": paths, "status": "active", "at": now(), "fresh": True,
+                      **({"carved": carved} if carved else {})})
 
     edit(root, args.feature, set(ROLES), change)
 
@@ -1066,7 +1199,17 @@ def brief(root: Path, args: argparse.Namespace) -> str:
             edit(root, args.feature, set(ROLES), lambda item: item.setdefault("dependency_overrides", []).append(override))
     if args.fresh:
         fresh_assignment(root, args)
+    elif args.role in (record["current_role"], record.get("side_role")):
+        # Every brief starts a new agent (a resumed agent keeps its claim), so a claimed assignment is reissued (#46, #63).
+        held = [item["id"] for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == args.role]
+        if held and lanes.claimed(root, held[-1]):
+            fresh_assignment(root, args, "brief: claimed by an earlier agent")
+            print(f"warning: {held[-1]} was claimed by an earlier agent; issued a new assignment with the same paths for this brief. "
+                  "To continue the earlier agent instead, resume it with SendMessage (no new brief).", file=sys.stderr)
     record = load(root, args.feature)
+    stale = plans.stale_text(plans.latest(record))
+    if stale and args.role in ("implementer", "fixer", "reviewer"):
+        print(f"warning: {stale}", file=sys.stderr)
     others = [item for item in lanes.active_assignments(root) if item["feature"] != record["feature"]]
     return briefs.render(root, record, args.role, args.batch, args.final_batch, others, args.parent_confirmed)
 
@@ -1082,7 +1225,7 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "check": check, "bug": bug, "blocker": blocker, "handoff": handoff, "gate": gate,
     "spec-check": spec_check, "spec-sync": spec_sync, "archive": archive, "restore": restore, "overlap": overlap,
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
-    "plan": plan_command, "answer": answer,
+    "plan": plan_command, "answer": answer, "join": join,
 }
 
 
@@ -1104,7 +1247,8 @@ def output(value: Any, as_json: bool) -> None:
             print(line)
     elif "status" in value and "current_role" in value:
         print(f"{value['feature']}: {value['status']} ({value['current_role']})")
-        for key in ("blocked_on_pending", "plan_version", "batches", "ownership", "superseded", "added", "skipped", "warnings", "open_questions"):
+        for key in ("blocked_on_pending", "plan_version", "plan_stale", "batches", "ownership", "superseded", "added", "changed", "retired",
+                    "skipped", "warnings", "open_questions"):
             items = value.get(key)
             for item in items if isinstance(items, list) else [items] if items else []:
                 print(f"{key}: {item}")

@@ -25,7 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--large-tokens", type=int, default=5000, help="tool results at or above this size are large")
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument("--label", default="", help="report label, e.g. the plugin version")
-    parser.add_argument("--compare", type=Path, help="earlier report JSON to compare against")
+    parser.add_argument("--compare", type=Path, help="earlier report JSON to compare against (refused when it covers the same session time)")
+    parser.add_argument("--force", action="store_true", help="with --compare: compare even when both reports cover the same session time")
     parser.add_argument("--out-dir", type=Path, help="write retro.json and retro.md here")
     parser.add_argument("--json", action="store_true", help="print JSON instead of Markdown")
     parser.add_argument("--conformance", action="store_true", help="also check workflow-rule conformance (early starts, lanes, briefs, ...)")
@@ -39,13 +40,33 @@ def slug(path: Path) -> str:
 
 
 def in_window(run: transcripts.Run, since: str, until: str) -> bool:
+    """A run belongs to the window its start falls in, so disjoint --since/--until windows partition the runs."""
     if not run.start:
         return False
-    return (not since or run.end >= since) and (not until or run.start <= until)
+    return (not since or run.start >= since) and (not until or run.start <= until)
 
 
-def compare(report: dict[str, Any], path: Path) -> dict[str, Any]:
+def known_features(project: Path) -> set[str]:
+    names = {path.stem for path in (project / "specs").glob("[0-9][0-9][0-9][0-9]-*.md")}
+    names |= {path.stem for directory in ("active", "archive") for path in (project / "implementation" / directory).glob("*.json")}
+    return names
+
+
+def overlap(old: dict[str, Any], report: dict[str, Any]) -> list[str]:
+    """Sessions both reports measured within intersecting time spans: their totals would count the same runs twice."""
+    shared = sorted(set(old.get("inputs", {}).get("sessions") or []) & set(report["inputs"]["sessions"]))
+    first, second = old.get("inputs", {}).get("span") or ["", ""], report["inputs"]["span"]
+    if not shared or not (all(first) and all(second)):
+        return shared  # an older report without a span: assume it overlaps
+    return shared if first[0] <= second[1] and second[0] <= first[1] else []
+
+
+def compare(report: dict[str, Any], path: Path, force: bool) -> dict[str, Any]:
     old = json.loads(path.read_text(encoding="utf-8"))
+    shared = overlap(old, report)
+    if shared and not force:
+        raise SystemExit(f"error: --compare: both reports cover session(s) {', '.join(shared)} over overlapping time; their totals "
+                         "would count the same runs. Use disjoint --since/--until windows, or --force to compare anyway.")
     rows = []
     for scope in ("subagents", "parent"):
         for key in ("runs", "processed_tokens", "weighted_tokens", "final_context_tokens", "tool_calls"):
@@ -56,7 +77,7 @@ def compare(report: dict[str, Any], path: Path) -> dict[str, Any]:
         rows.append(delta(f"{item['role']}.mean_weighted_tokens", old_roles.get(item["role"], {}).get("mean_weighted_tokens"), item["mean_weighted_tokens"]))
     old_keys = {item["key"] for item in old.get("findings", [])}
     new_keys = {item["key"] for item in report["findings"]}
-    return {"against": old.get("label", ""), "metrics": rows,
+    return {"against": old.get("label", ""), "metrics": rows, **({"overlapping_sessions": shared} if shared else {}),
             "new_findings": sorted(new_keys - old_keys), "resolved_findings": sorted(old_keys - new_keys)}
 
 
@@ -84,7 +105,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if not directory.is_dir():
         raise SystemExit(f"error: transcript directory not found: {directory}")
     data = records.load(project)
-    loaded = transcripts.load(directory, set(args.session) or None, args.since, args.until)
+    loaded = transcripts.load(directory, set(args.session) or None, args.since, args.until, known_features(project))
     runs = [run for run in loaded if in_window(run, args.since, args.until)]
     weights = prices(args.model_weight)
     measured = [metrics.run_metrics(run, args.large_tokens, str(project), weights) for run in runs]
@@ -100,6 +121,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION, "label": args.label,
         "inputs": {"project": str(project), "transcripts": str(directory), "sessions": sorted({run.session for run in runs}),
                    "since": args.since, "until": args.until, "run_count": len(runs), "large_tokens": args.large_tokens,
+                   # The measured time: the window bounds when given, else the runs' first and last activity.
+                   "span": [args.since or min((run.start for run in runs), default=""), args.until or max((run.end for run in runs), default="")],
                    "model_prices": weights},
         "totals": {"subagents": metrics.total(agents), "parent": metrics.total(parent), "plugin_dev": metrics.total(dev)},
         "by_model": metrics.by_model(workflow),
@@ -113,7 +136,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if args.conformance:
         report["conformance"] = conformance.build(project, runs, measured)
     if args.compare:
-        report["comparison"] = compare(report, args.compare)
+        report["comparison"] = compare(report, args.compare, args.force)
     return redact.walk(report)
 
 

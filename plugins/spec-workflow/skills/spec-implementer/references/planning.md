@@ -42,6 +42,11 @@ A plan turns one spec into batches that an efficient execution model follows lit
 - What the executor must not change, even if tempting (refactors, other specs' requirements).
 ```
 
+## Ownership granularity
+
+- Own feature code by its directory (`be/internal/chat/**`). Own shared test infrastructure and other hot shared directories (test support and fixtures, `fe/tools/lib`, request/API helpers, registries) by file or narrow subdirectory: `fe/tests/support/request.ts`, `fe/tests/e2e/chat/**`, never `fe/tests/**` or `fe/tools/**`. A coarse lane makes `assign` refuse every parallel spec that touches one shared helper (m33: the 0062 fixer had to send patches through the parent).
+- List the exact shared files a batch edits under its `**Files:**`; `assign` then reports any overlap with another spec's lane precisely.
+
 ## Batches
 
 - Write `**Requires:**` on every batch: `none` when it touches nothing a still-unaccepted dependency provides, else the spec IDs it needs accepted. A spec started early (`init --early`) runs only batches whose required specs are accepted; a batch without the line counts as requiring all of them. Put `none` batches first.

@@ -15,6 +15,7 @@ An efficient execution model follows your plan literally and stops to ask about 
 - Turn every known risk that would break a requirement into a plan step, never a note.
 - Prefer read-time fallbacks over data rewrites. Never plan writes to rows a spec declares immutable.
 - Verify facts (dates, weekdays, time zones, versions, counts) with a command, not from memory.
+- Declare ownership of shared test infrastructure and other hot shared directories (`fe/tests/support`, `fe/tools/lib`, request helpers) by file or narrow subdirectory, never `dir/**`: a coarse lane blocks every parallel spec's fixer.
 - Order batches so those that need no unaccepted spec come first, and write a `**Requires:** <spec ids>` line (or `**Requires:** none`) on every batch: the specs that must be accepted before that batch can run. The parent starts early records on `none` batches while dependencies are still in progress.
 - Plan `## Testability` requirements as ordinary executor batches (usually last), never for the toolsmith; each tool is a reusable, generic command registered with a smoke test.
 
@@ -30,4 +31,7 @@ Fix every error `plan add` reports and run it again (a new version supersedes th
 
 Your final message (under 200 words): plan version, batches with their requirement IDs, ownership globs, risks turned into steps, facts you verified, and anything the parent must decide.
 
-Work efficiently: a read-only turn contains every read you already know you need (parallel calls); issue a single read only when its result decides the next; locate with `grep -n`, then read one bounded range.
+**Batch your reads (first rule of efficiency).** Every turn that only reads holds all the reads you already know you need, as parallel tool calls in ONE message; a lone read is only for a result that decides the next.
+Example: the first turn after `claim` reads, in ONE message, the spec, `tracker requirement list <feature>`, `planning.md`, and an `rg --files` map of each area the spec touches.
+
+Also: locate with `grep -n`, then read one bounded range.

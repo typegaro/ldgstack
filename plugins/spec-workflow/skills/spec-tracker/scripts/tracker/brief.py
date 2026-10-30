@@ -109,7 +109,9 @@ def decisions(record: dict[str, Any]) -> str:
     return "; ".join(found) or "none"
 
 
-def next_command(tracker: str, feature: str, role: str, final: bool, batch: str | None) -> str:
+def next_command(tracker: str, feature: str, role: str, final: bool, batch: str | None, side: bool = False) -> str:
+    if side:
+        return f'{tracker} join {feature} --completed "..."   (you work alongside the fixer; never `handoff`)'
     handoff = f'{tracker} handoff {feature} --to {{target}} --completed "..." --remaining "..."'
     if role == "implementer":
         if batch and not final:
@@ -158,22 +160,52 @@ def plan_text(record: dict[str, Any], role: str, batch: str | None, tracker: str
         return "not shown to this role; work from the spec"
     if plan is None:
         return "none"
+    stale = plans.stale_text(plan)
+    warning = f"\n  WARNING: {stale}" if stale else ""
     if role == "implementer":
         number = plan_batch(record, batch)
         if number is None and len(plan["batches"]) > 1 and batch:
-            return f"follow `{show}` for the requirements of this range"
+            return f"follow `{show}` for the requirements of this range{warning}"
         body = plans.brief_text(plan, number if number is not None else (1 if len(plan["batches"]) == 1 else None), show)
-        return f"v{plan['version']}, follow it literally:\n" + "\n".join(f"  {line}" if line else "" for line in body.splitlines())
+        return f"v{plan['version']}, follow it literally:{warning}\n" + "\n".join(f"  {line}" if line else "" for line in body.splitlines())
     if role in ("reviewer", "fixer"):
-        return f"v{plan['version']}: `{show}` (what the executor was told to build)"
+        return f"v{plan['version']}: `{show}` (what the executor was told to build){warning}"
     return "not shown to this role; work from the spec"
+
+
+FILE = re.compile(r"`([^`\s]+/[^`\s]+)`")
+
+
+def batch_files(record: dict[str, Any], batch: str | None) -> list[str]:
+    """Paths the plan batch names in backticks (minus globs and `:line` suffixes), for the first-turn read list."""
+    plan = plans.latest(record)
+    number = plan_batch(record, batch)
+    if plan is None or (number is None and len(plan["batches"]) != 1):
+        return []
+    text = plans.batch(plan, number if number is not None else 1)["text"]
+    found = [re.sub(r":[0-9]+(?:-[0-9]+)?$", "", item) for item in FILE.findall(text)]
+    return list(dict.fromkeys(item for item in found if "*" not in item and not item.startswith(("-", "http"))))[:8]
+
+
+def first_turn(record: dict[str, Any], role: str, batch: str | None, spec_command: str) -> str:
+    """One parallel read turn the agent issues right after `claim` (turns.batching)."""
+    reads = [f"`{spec_command}` (requirements)", f"`tracker requirement list {record['feature']}`"]
+    files = batch_files(record, batch) if role == "implementer" else []
+    if files:
+        reads.append("these batch files: " + ", ".join(files))
+    elif role == "fixer":
+        reads.append("the files named in each bug's reproduction and evidence")
+    else:
+        reads.append("every file you already know you need")
+    return "in ONE message (parallel tool calls), read " + "; ".join(reads)
 
 
 def render(root: Path, record: dict[str, Any], role: str, batch: str | None, final: bool, others: list[dict[str, Any]],
            confirmed: bool = False) -> str:
     feature = record["feature"]
     tracker = f"python3 {SCRIPTS / 'spec_tracker.py'}"
-    if record["current_role"] != role:
+    side = record.get("side_role") == role
+    if record["current_role"] != role and not side:
         raise TrackerError(f"the record is with the {record['current_role']}; run `{tracker} handoff {feature} --to {role} ...` first")
     if batch and role != "implementer":
         raise TrackerError("--batch applies only to implementer briefs")
@@ -184,6 +216,8 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
     own = assignment_for(record, role, tracker)
     foreign = sorted({glob for item in others for glob in item.get("paths", [])})
     ownership = f"edit only {', '.join(own['paths'])}" if own["paths"] else "read-only: edit nothing in the project"
+    carved = [f"{item['glob']} (carved out to {item['to']}, {item['feature']})" for item in own.get("carved", [])]
+    ownership += f", except {', '.join(carved)}" if carved else ""
     ownership += f"; do not touch {', '.join(foreign)}" if foreign else ""
     kit = toolkit.summary(root)
     gaps = [f"{item['id']} {item['capability']} for {', '.join(item['requirements'])}" for item in open_tool_gaps(record)]
@@ -191,11 +225,12 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         "marker": MARKER, "spec_path": record["specification"]["path"], "spec_cli": f"python3 {SPEC_CLI}",
         "spec_id": str(int(feature.split("-", 1)[0])) if feature[:4].isdigit() else feature,
         "role": role, "feature": feature, "status": record["status"], "current_role": record["current_role"],
-        "scope": scope(record, role, batch, final), "decisions": decisions(record), "plan": plan_text(record, role, batch, tracker),
+        "scope": scope(record, role, batch, final),
+        "first_turn": first_turn(record, role, batch, f"python3 {SPEC_CLI} show {int(feature[:4]) if feature[:4].isdigit() else feature} --effective"), "decisions": decisions(record), "plan": plan_text(record, role, batch, tracker),
         "assignment": f"{own['id']} ({own['role']})", "claim_command": f"{tracker} claim {own['id']}",
         "ownership": ownership, "toolchain": toolchain(root), "tracker": tracker,
         "toolkit": "\n".join(f"  - {line}{' (stale)' if line.split(' ', 1)[0] in kit['stale'] else ''}" for line in kit["lines"]) or "  none registered",
-        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch),
+        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side),
     }
     try:
         return template().format(**values).rstrip() + "\n"

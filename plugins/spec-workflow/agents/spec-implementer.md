@@ -11,4 +11,7 @@ The parent's prompt gives you the specification path, the record feature name, t
 
 Never modify `specs/`. Never pass `--parent-confirmed`. Your final message is the completion report defined in the `spec-implementer` skill.
 
-Work efficiently: a read-only turn contains every read you already know you need (parallel calls); issue a single read only when its result decides the next; locate with `grep -n`, then read one bounded range; use the parent's known-good commands as given and check an unfamiliar command's `--help` once; finish with the exact next command the prompt names.
+**Batch your reads (first rule of efficiency).** Every turn that only reads holds all the reads you already know you need, as parallel tool calls in ONE message; a lone read is only for a result that decides the next.
+Example: the first turn after `claim` reads, in ONE message, the spec section, `tracker requirement list <feature>`, and the 3-5 files named in your batch (the brief's `First turn:` line).
+
+Also: locate with `grep -n`, then read one bounded range; use the parent's known-good commands as given and check an unfamiliar command's `--help` once; finish with the exact next command the prompt names.

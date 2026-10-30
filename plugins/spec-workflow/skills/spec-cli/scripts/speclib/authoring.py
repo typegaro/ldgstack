@@ -140,8 +140,8 @@ def edit(catalog: Catalog, manifest: dict[str, Any], value: str, source: str, re
     save_manifest(catalog.root, manifest)
     result = {"id": spec.id, "name": spec.name, "path": spec.path.relative_to(catalog.root).as_posix(), "logged": True}
     if spec.status == "in_progress":
-        result["next"] = (f"tracker spec-sync {spec.feature} --reason \"{reason}\" --parent-confirmed && "
-                          f"tracker requirement import {spec.feature} --include-amended --parent-confirmed; "
+        result["next"] = (f"tracker spec-sync {spec.feature} --reason \"{reason}\" --parent-confirmed "
+                          "(re-imports and invalidates only changed requirements); "
                           "send the record back to the implementer if requirements changed")
     return result
 
