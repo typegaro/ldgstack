@@ -29,7 +29,8 @@ tracker risk 0000-project-bootstrap high|normal --parent-confirmed      # high: 
 tracker bug follow-up 0000-project-bootstrap BUG-... --reason "..." --parent-confirmed [--user-decision "..."]   # low (medium with a decision) leaves the gate
 tracker follow-ups                                                     # follow-up bugs in active and archived records
 tracker assign 0000-project-bootstrap --role implementer --from-plan --batch 2 --parallel --parent-confirmed   # one more executor, disjoint lane
-tracker assign 0000-project-bootstrap --release --assignment ASSIGN-... --parent-confirmed                  # end one parallel lane
+tracker assign 0000-project-bootstrap --release --assignment ASSIGN-... --parent-confirmed                  # end one parallel lane (parent)
+tracker join 0000-project-bootstrap --assignment ASSIGN-... --completed "..."                            # an executor ends its batch lane; siblings keep theirs
 tracker worktree create 0000-project-bootstrap [--repos be fe] [--base <branch>] --parent-confirmed   # <repo>/<branch> checkouts
 tracker worktree status [0000-project-bootstrap]                       # changes, ahead/behind main, merged, test slot holder
 tracker worktree merge 0000-project-bootstrap --parent-confirmed       # after the acceptance gate; all repos or none

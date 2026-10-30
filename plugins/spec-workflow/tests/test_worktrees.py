@@ -328,11 +328,41 @@ class BatchLaneTest(WorktreeCase):
         self.handoff("implementer")
         first = self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "1", "--parent-confirmed")["result"]
         self.assertEqual(first["paths"], ["be/internal/keys/store.go", "be/internal/a.go"])  # fe/src/app.ts is outside **Files:**
-        second = self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "2", "--parallel", "--parent-confirmed")["result"]
+        # A batch without its own lane is refused instead of borrowing, and reissuing, a sibling's lane.
+        markers = self.root / "implementation" / ".assignments"
+        markers.mkdir(exist_ok=True)
+        (markers / "agent-b1").write_text(first["assignment"] + "\n", encoding="utf-8")
+        loose = self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "fe/src/**", "--parallel", "--parent-confirmed")["result"]
+        error = self.tracker("brief", FEATURE, "--role", "implementer", "--batch", "2", succeeds=False)["error"]["message"]
+        self.assertIn("no lane for batch 2", error)
+        self.tracker("assign", FEATURE, "--release", "--assignment", loose["assignment"], "--parent-confirmed")
+        second =self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "2", "--parallel", "--parent-confirmed")["result"]
         self.assertEqual(second["paths"], ["fe/src/keys/panel.tsx", "fe/src/app.ts"])
         brief = self.tracker("brief", FEATURE, "--role", "implementer", "--batch", "2")["result"]
         self.assertIn(f"Assignment: {second['assignment']}", brief)
         self.assertIn("do not touch be/internal/a.go, be/internal/keys/store.go", brief)
+        self.assertIn(f"join {FEATURE} --assignment {second['assignment']}", brief)
+
+        # The batch-1 executor finishes first: a handoff would end batch 2's lane too, so only `join` is allowed (#78).
+        lanes = lambda: {item["id"]: item["status"] for item in json.loads(  # noqa: E731
+            (self.root / "implementation" / "active" / f"{FEATURE}.json").read_text(encoding="utf-8"))["assignments"]}
+        error = self.tracker("handoff", FEATURE, "--to", "parent", "--completed", "b1", "--remaining", "b2", succeeds=False)["error"]["message"]
+        self.assertIn("--assignment <its ID>", error)
+        self.assertEqual(lanes()[second["assignment"]], "active")
+        self.tracker("join", FEATURE, "--assignment", first["assignment"], "--completed", "batch 1 done")
+        self.assertEqual((lanes()[first["assignment"]], lanes()[second["assignment"]]), ("released", "active"))
+        # A refused parallel assign stores nothing.
+        before = lanes()
+        self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "fe/src/**", "--parallel", "--parent-confirmed", succeeds=False)
+        self.assertEqual(lanes(), before)
+        # Batch 1's files are free again for a follow-up lane beside batch 2.
+        third = self.tracker("assign", FEATURE, "--role", "implementer", "--from-plan", "--batch", "1", "--parallel", "--parent-confirmed")["result"]
+        self.assertEqual(lanes()[third["assignment"]], "active")
+        self.tracker("join", FEATURE, "--assignment", third["assignment"], "--completed", "follow-up done")
+        self.tracker("requirement", "implemented", FEATURE, "REQ-001", "--evidence", "done")
+        self.tracker("requirement", "implemented", FEATURE, "REQ-002", "--evidence", "done")
+        self.check("unit")
+        self.handoff("reviewer")  # the last executor (one lane left) hands off
 
 
 class FollowUpTest(WorktreeCase):

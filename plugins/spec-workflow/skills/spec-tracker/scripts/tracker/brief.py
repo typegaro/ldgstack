@@ -127,13 +127,15 @@ def decisions(record: dict[str, Any]) -> str:
     return "; ".join(found) or "none"
 
 
-def next_command(tracker: str, feature: str, role: str, final: bool, batch: str | None, side: bool = False) -> str:
+def next_command(tracker: str, feature: str, role: str, final: bool, batch: str | None, side: bool = False,
+                 assignment: str | None = None, siblings: bool = False) -> str:
     if side:
         return f'{tracker} join {feature} --completed "..."   (you work alongside the fixer; never `handoff`)'
     handoff = f'{tracker} handoff {feature} --to {{target}} --completed "..." --remaining "..."'
     if role == "implementer":
-        if batch and not final:
-            return "none: end without a handoff; the parent resumes you with the next batch"
+        if (batch and not final) or siblings:
+            return (f'{tracker} join {feature} --assignment {assignment} --completed "..."   (ends only your batch lane; never `handoff`'
+                    + (", other executors are working in parallel)" if siblings else ")"))
         return handoff.format(target="reviewer") + "   (blocked: --to parent)"
     if role == "reviewer":
         return handoff.format(target="tester") + "   (bugs, blockers, or tool gaps: --to parent)"
@@ -152,8 +154,12 @@ def assignment_for(record: dict[str, Any], role: str, tracker: str, batch: str |
         paths = "--read-only" if role in ("reviewer", "tester", "planner") else "--from-plan" if plans.latest(record) else "--paths <glob> [<glob> ...]"
         raise TrackerError(f"no active {role} assignment; run `{tracker} assign {record['feature']} --role {role} {paths} --parent-confirmed`")
     number = plan_batch(record, batch) if role == "implementer" and batch else None
-    # Parallel executors (#78) each hold the lane assigned for their batch.
-    return next((item for item in reversed(active) if number is not None and item.get("batch") == number), active[-1])
+    # Parallel executors (#78) each hold the lane assigned for their batch; never hand one batch another's lane.
+    mine = next((item for item in reversed(active) if number is not None and item.get("batch") == number), None)
+    if mine is None and number is not None and len(active) > 1:
+        raise TrackerError(f"no lane for batch {number} among the parallel lanes ({', '.join(item['id'] for item in active)}); run "
+                           f"`{tracker} assign {record['feature']} --role implementer --from-plan --batch {number} --parallel --parent-confirmed` first")
+    return mine or active[-1]
 
 
 def implementer_guard(record: dict[str, Any], batch: str | None, confirmed: bool, tracker: str) -> None:
@@ -260,7 +266,7 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         "ownership": ownership, "toolchain": toolchain(root, config, tree["branch"] if tree else None), "tracker": tracker,
         "worktree": worktree(record, config, role), "risk": record.get("risk", "normal"),
         "toolkit": "\n".join(f"  - {line}{' (stale)' if line.split(' ', 1)[0] in kit['stale'] else ''}" for line in kit["lines"]) or "  none registered",
-        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side),
+        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side, own["id"], bool(siblings) and role == "implementer"),
     }
     try:
         return template().format(**values).rstrip() + "\n"

@@ -234,3 +234,8 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 ## Changes in 0.10.2
 
 - `assign --from-plan --batch N` claims only that batch's files: the paths under its `**Files:**` (else anywhere in the batch), backticks optional, `:line` dropped, kept only inside the plan's ownership; with none it falls back to the whole ownership and warns (#73). Disjoint batches can now run as `--parallel` executors without hand-written `--paths`.
+
+## Changes in 0.10.3
+
+- Parallel executors: an executor ends its batch with `tracker join <feature> --assignment <ID> --completed "..."` (its brief's Next command), releasing only its own lane; `handoff` is refused while sibling executor lanes are active, so one executor can no longer end another's lane mid-work.
+- `brief --batch N` with several parallel lanes refuses when batch N has no lane of its own, instead of reissuing a sibling batch's lane (which released every lane and blocked the next `assign --parallel`).

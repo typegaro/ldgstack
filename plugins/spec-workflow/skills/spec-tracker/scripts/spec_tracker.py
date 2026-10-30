@@ -189,8 +189,9 @@ def build_parser() -> argparse.ArgumentParser:
     assign.add_argument("--from", dest="carve_from", metavar="ASSIGNMENT", help="with --carve: the other spec's active assignment that gives up the glob")
     assign.add_argument("--alongside", action="store_true",
                         help="--role toolsmith while the fixer works: keep the fixer's lane (lanes must be disjoint); the toolsmith ends with `join`")
-    joined = command(commands, "join", help="end the side toolsmith's work alongside the fixer (the side agent's last command)")
+    joined = command(commands, "join", help="end a side toolsmith's work, or (--assignment) one executor's batch lane; the agent's last command")
     joined.add_argument("--completed", required=True)
+    joined.add_argument("--assignment", metavar="ID", help="an executor ending its batch: release only this lane (parallel siblings keep theirs)")
     assign.add_argument("--user-decision", help="early record: run a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
     commands.add_parser("claim", help="first command of a brief: binds this agent to its assignment (the hook records it)").add_argument("assignment")
     brief = command(commands, "brief", help="print the delegation prompt for the record's current role")
@@ -831,9 +832,11 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                 raise TrackerError("no open tool gaps for toolsmith")
             record["status"] = "tooling"
         writers = [item["id"] for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer"]
-        if source == "implementer" and target != "parent" and len(writers) > 1:
-            raise TrackerError(f"parallel executors still hold lanes ({', '.join(writers)}); the parent releases each finished one "
-                               f"(`tracker assign {record['feature']} --release --assignment <ID> --parent-confirmed`) before the last hands off")
+        if source == "implementer" and len(writers) > 1:
+            # A handoff would release every executor lane, including running siblings' (#78).
+            raise TrackerError(f"parallel executors still hold lanes ({', '.join(writers)}). An executor ending its batch runs "
+                               f"`tracker join {record['feature']} --assignment <its ID> --completed \"...\"`; the last one hands off. "
+                               f"Parent: release a lane with `tracker assign {record['feature']} --release --assignment <ID> --parent-confirmed`.")
         tree = record.get("worktree")
         if tree and source != target and source in {"implementer", "fixer", "toolsmith"}:
             # The branch holds every round, so reviewers diff it against main and the merge has one source.
@@ -1258,8 +1261,18 @@ def alongside_guard(record: Record, role: str) -> None:
 
 
 def join(root: Path, args: argparse.Namespace) -> Record:
-    """The side toolsmith's last command: release its lane and log what it built; the fixer's handoff then proceeds."""
+    """The side toolsmith's last command: release its lane and log what it built; the fixer's handoff then proceeds.
+    With --assignment, an executor ending a batch releases only its own lane (#78: parallel siblings keep working)."""
     def change(record: Record) -> None:
+        if args.assignment:
+            item = next((item for item in record.get("assignments", [])
+                         if item["id"] == args.assignment and item["status"] == "active" and item["role"] == "implementer"), None)
+            if item is None:
+                raise TrackerError(f"{args.assignment} is not an active executor lane of {record['feature']}")
+            item.update(status="released", released_at=now(), released_by="join")
+            record.setdefault("batch_reports", []).append({"assignment": item["id"], "batch": item.get("batch"), "completed": args.completed,
+                                                           "at": now()})
+            return
         side = record.get("side_role")
         if not side:
             raise TrackerError("no side role is working alongside; use `handoff`")
@@ -1298,8 +1311,13 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
         items = record.setdefault("assignments", [])
         active = [item for item in items if item["status"] == "active" and item["role"] == args.role]
         number = briefs.plan_batch(record, args.batch) if args.role == "implementer" and getattr(args, "batch", None) else None
-        # With parallel executors, only the brief's own batch lane is renewed.
-        active = [item for item in active if item.get("batch") == number] or active if number is not None else active
+        # With parallel executors, only the brief's own batch lane is renewed; never another batch's (#78).
+        if number is not None:
+            mine = [item for item in active if item.get("batch") == number]
+            if not mine and len(active) > 1:
+                raise TrackerError(f"no lane for batch {number} among the parallel lanes; `spec-tracker assign {record['feature']} "
+                                   f"--role implementer --from-plan --batch {number} --parallel --parent-confirmed` first")
+            active = mine or active
         latest_plan = plans.latest(record)
         carved: list[Record] = []
         if active:

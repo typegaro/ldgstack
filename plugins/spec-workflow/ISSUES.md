@@ -429,3 +429,7 @@ Full-suite runs at every batch boundary, and ≈3.5 h of toolsmith time on Docke
 
 ### 81. Retro flags most of a normal run as plugin development (open)
 The 2026-10-30 retro tagged 41 of 57 runs `plugin_dev`, so its per-spec table covered two specs. Check the 0.8.4 plugin-source-write detection against runs that only call the CLIs from a local marketplace checkout.
+
+### 82. Parallel executor handoff released its siblings' lanes (0.10.0–0.10.2)
+In 0082 batch 4's executor ran `handoff --to parent` while batch 6's executor (`--parallel`) was working; the handoff released every executor lane. A later `brief` for a batch without its own lane reissued a sibling's lane, and the next `assign --parallel` then collided with it.
+**Resolved (0.10.3):** `join --assignment`, the handoff refusal while siblings are active, and the batch-lane check in `brief`.
