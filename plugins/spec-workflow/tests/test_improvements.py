@@ -12,7 +12,8 @@ from pathlib import Path
 
 from test_workflow import FEATURE, GUARD, PLUGIN, TRACKER, CliTestCase, spec_text
 
-M33 = Path(os.environ.get("SPEC_WORKFLOW_COMPAT_ROOT", Path.home() / "Prj" / "m33"))
+# Optional fixture: a real project with specs/ and implementation/ (its compatibility tests are skipped when unset).
+COMPAT = Path(os.environ.get("SPEC_WORKFLOW_COMPAT_ROOT") or "/nonexistent")
 
 AMENDING_BODY = """# Amendment
 
@@ -474,15 +475,15 @@ class SmokeTest(CliTestCase):
         self.assertEqual(self.tracker("status")["result"], [])
 
 
-@unittest.skipUnless((M33 / "specs").is_dir() and (M33 / "implementation").is_dir(), "no compatibility fixture")
+@unittest.skipUnless((COMPAT / "specs").is_dir() and (COMPAT / "implementation").is_dir(), "no compatibility fixture")
 class CompatibilityTest(unittest.TestCase):
-    """Run read-only commands against a copy of a real project (SPEC_WORKFLOW_COMPAT_ROOT, default ~/Prj/m33)."""
+    """Run read-only commands against a copy of a real project (SPEC_WORKFLOW_COMPAT_ROOT)."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        shutil.copytree(M33 / "specs", self.root / "specs")
-        shutil.copytree(M33 / "implementation", self.root / "implementation")
+        shutil.copytree(COMPAT / "specs", self.root / "specs")
+        shutil.copytree(COMPAT / "implementation", self.root / "implementation")
         (self.root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
 
     def tearDown(self) -> None:

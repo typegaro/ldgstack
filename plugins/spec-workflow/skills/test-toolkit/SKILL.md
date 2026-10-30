@@ -5,7 +5,7 @@ description: Define, build, and maintain a project's durable test toolkit (imple
 
 # Test Toolkit
 
-Testers can only test what they can drive and observe. When a capability is missing, the gap is recorded and a toolsmith builds a durable, project-owned tool, registered in `implementation/toolkit.json`, so the next run already has it. Without this loop, testers rebuild throwaway tools every round (m33: 58 scratchpad scripts in 7 runs; mock OAuth server, mock MCP server, Playwright drivers, `go -overlay` DB planting, seed scripts; see [references/examples.md](references/examples.md)).
+Testers can only test what they can drive and observe. When a capability is missing, the gap is recorded and a toolsmith builds a durable, project-owned tool, registered in `implementation/toolkit.json`, so the next run already has it. Without this loop, testers rebuild throwaway tools every round (pilot run: 58 scratchpad scripts in 7 runs; mock OAuth server, mock MCP server, Playwright drivers, `go -overlay` DB planting, seed scripts; see [references/examples.md](references/examples.md)).
 
 The developer inspection CLI (`dev-inspection`) is the toolkit's `be.inspect` tool. Its rules still apply to it.
 

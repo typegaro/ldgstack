@@ -1,6 +1,6 @@
 """Tests for the test toolkit manifest, tool gaps, the toolsmith handoff, the #17 regression, and the ad hoc tool retro metric.
 
-Motivating examples come from the m33 run, where testers rebuilt throwaway tools in the scratchpad every round:
+Motivating examples come from a pilot run, where testers rebuilt throwaway tools in the scratchpad every round:
 a mock OAuth server and ChatGPT backend, a mock MCP server, Playwright drivers, go -overlay DB planting, and seed scripts.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_improvements import M33
+from test_improvements import COMPAT
 from test_retro import RETRO, Transcript, usage
 from test_workflow import GUARD, PLUGIN, CliTestCase
 
@@ -164,15 +164,15 @@ class ToolGapTest(ToolkitCase):
         self.tracker("gate", self.feature, "acceptance")
 
 
-@unittest.skipUnless((M33 / "specs").is_dir() and (M33 / "implementation").is_dir(), "no compatibility fixture")
+@unittest.skipUnless((COMPAT / "specs").is_dir() and (COMPAT / "implementation").is_dir(), "no compatibility fixture")
 class ToolkitCompatibilityTest(unittest.TestCase):
-    """Records written before tool gaps and the toolkit existed keep working (copy of ~/Prj/m33)."""
+    """Records written before tool gaps and the toolkit existed keep working (copy of SPEC_WORKFLOW_COMPAT_ROOT)."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        shutil.copytree(M33 / "specs", self.root / "specs")
-        shutil.copytree(M33 / "implementation", self.root / "implementation")
+        shutil.copytree(COMPAT / "specs", self.root / "specs")
+        shutil.copytree(COMPAT / "implementation", self.root / "implementation")
         (self.root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
 
     def tearDown(self) -> None:
@@ -188,7 +188,7 @@ class ToolkitCompatibilityTest(unittest.TestCase):
         for record in self.run_cli("status")["result"]:
             self.assertEqual(record["open_tool_gaps"], 0)
         self.assertEqual(self.run_cli("tool-gap", "list")["result"], [])
-        self.assertIsInstance(self.run_cli("toolkit", "list")["result"], list)  # m33 has registered tools since 0.5.0
+        self.assertIsInstance(self.run_cli("toolkit", "list")["result"], list)  # the fixture has registered tools
         archived = sorted((self.root / "implementation" / "archive").glob("*.json"))[0].stem
         self.run_cli("restore", archived, "--parent-confirmed")
         before = self.run_cli("gate", archived, "acceptance", succeeds=False)["error"]["message"] if not self.passes(archived) else ""

@@ -1,6 +1,6 @@
 # Planning (planner role)
 
-A plan turns one spec into batches that an efficient execution model follows literally. In the m33 pilot (specs 0033/0034), every executor question came from a plan gap: missed files (an icons file, a migration version constant, loader code for a fallback), a known risk written as a note instead of a step, a backfill that rewrote immutable snapshots, and a wrong weekday. Close those gaps here.
+A plan turns one spec into batches that an efficient execution model follows literally. In the pilot project (specs 0033/0034), every executor question came from a plan gap: missed files (an icons file, a migration version constant, loader code for a fallback), a known risk written as a note instead of a step, a backfill that rewrote immutable snapshots, and a wrong weekday. Close those gaps here.
 
 ## Mandatory checks (before writing the plan)
 
@@ -44,7 +44,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 
 ## Ownership granularity
 
-- Own feature code by its directory (`be/internal/chat/**`). Own shared test infrastructure and other hot shared directories (test support and fixtures, `fe/tools/lib`, request/API helpers, registries) by file or narrow subdirectory: `fe/tests/support/request.ts`, `fe/tests/e2e/chat/**`, never `fe/tests/**` or `fe/tools/**`. A coarse lane makes `assign` refuse every parallel spec that touches one shared helper (m33: the 0062 fixer had to send patches through the parent).
+- Own feature code by its directory (`be/internal/chat/**`). Own shared test infrastructure and other hot shared directories (test support and fixtures, `fe/tools/lib`, request/API helpers, registries) by file or narrow subdirectory: `fe/tests/support/request.ts`, `fe/tests/e2e/chat/**`, never `fe/tests/**` or `fe/tools/**`. A coarse lane makes `assign` refuse every parallel spec that touches one shared helper (pilot run: the 0062 fixer had to send patches through the parent).
 - List the exact shared files a batch edits under its `**Files:**`; `assign` then reports any overlap with another spec's lane precisely.
 
 ## Batches

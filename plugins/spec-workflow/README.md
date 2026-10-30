@@ -2,6 +2,44 @@
 
 Specs in `specs/` are the immutable contract. The parent derives each spec's requirement list. A deep-reasoning planner writes a batched plan, an efficient execution model builds it batch by batch, an adversarial reviewer audits the code, an independent tester verifies real behavior, and a separate fixer fixes findings. The parent archives only through CLI-enforced gates.
 
+Works in Claude Code and OpenCode (1.x and 2.x) from the same skills, scripts, and guard. Requires Python 3.10+.
+
+## Install
+
+### Claude Code
+
+```text
+/plugin marketplace add typegaro/ldgstack
+/plugin install spec-workflow@ldgstack
+```
+
+Update with `/plugin marketplace update ldgstack`.
+
+### OpenCode
+
+Add the plugin to `opencode.json` (global `~/.config/opencode/opencode.json` or a project's):
+
+```jsonc
+// OpenCode 1.x
+{ "plugin": ["spec-workflow@git+https://github.com/typegaro/ldgstack.git"] }
+// OpenCode 2.x
+{ "plugins": ["spec-workflow@git+https://github.com/typegaro/ldgstack.git"] }
+```
+
+Restart OpenCode. The plugin registers the skills, runs the path guard before file and shell tools, puts `spec` and `spec-tracker` on the shell `PATH`, and adds a short note that maps the Claude Code tool names in the skills to OpenCode's (`task`/`subagent`, `skill`, `question`).
+
+On **1.x** the plugin also registers the six agents. On **2.x** plugins can't add agents yet, so link them once from a clone:
+
+```bash
+git clone https://github.com/typegaro/ldgstack.git
+ldgstack/plugins/spec-workflow/opencode/install.sh                   # ~/.config/opencode/agents ($OPENCODE_CONFIG_DIR respected)
+ldgstack/plugins/spec-workflow/opencode/install.sh --project <dir>   # or <dir>/.opencode/agents
+```
+
+For a local checkout instead of the Git URL, use its path: `"plugin": ["file://<clone>/plugins/spec-workflow/opencode/plugin.js"]` (1.x) or `"plugins": ["<clone>"]` (2.x).
+
+Agents inherit your default model. Set the tiers per agent, e.g. `"agent": {"spec-planner": {"model": "<deep model>"}, "spec-reviewer": {"model": "<deep model>"}}` (1.x), or, on 2.x, install with `--copy` and add a `model:` line to the copied agent files.
+
 ## Contents
 
 | Kind | Name | Purpose |
@@ -22,6 +60,8 @@ Specs in `specs/` are the immutable contract. The parent derives each spec's req
 | Hook | `guard_paths.py` | Blocks direct edits and shell writes to `implementation/{active,archive}/`, `spec-archive.json`, and `toolkit.json`; blocks creating spec files outside `spec.py new`; blocks edits to accepted specs unless unlocked; blocks subagent edits and shell writes to `specs/` (except `specs/.drafts/`) and subagent `spec.py new/archive/restore/unlock/relock/defer/undefer/promote/adopt` |
 | Hook | `brief_check.py` | Advisory: warns when a spec-workflow Agent/Task prompt lacks the `tracker brief` marker |
 | Bin | `spec`, `spec-tracker` | Wrappers for the two CLIs |
+| OpenCode | `opencode/plugin.js` | 1.x and 2.x plugin: skills, agents (1.x), the same `guard_paths.py`, `PATH`, tool-name mapping |
+| OpenCode | `opencode/agents/` | 2.x agents, generated from `agents/` by `opencode/build.py` |
 
 ## Project setup
 
@@ -34,14 +74,15 @@ implementation/preflight.json   # {"commands": [...]} every agent must be able t
 implementation/toolkit.json     # created by `spec-tracker toolkit add`; durable test tools (mocks, seeders, fe driver, ...)
 ```
 
-Then ask Claude to "implement all specs" (`spec-orchestrator`) or to write a spec (`write-specs`).
+Then ask the agent to "implement all specs" (`spec-orchestrator`) or to write a spec (`write-specs`).
 
 ## CLI entry points
 
-`bin/spec` and `bin/spec-tracker` wrap `spec.py` and `spec_tracker.py`. To use them in your own shell:
+`bin/spec` and `bin/spec-tracker` wrap `spec.py` and `spec_tracker.py`. To use them in your own shell, put the plugin's `bin/` on `PATH`:
 
 ```bash
-export PATH="$HOME/.claude/plugins/cache/ldgstack/spec-workflow/<version>/bin:$PATH"   # or ~/Prj/ldgstack/plugins/spec-workflow/bin
+export PATH="$HOME/.claude/plugins/cache/ldgstack/spec-workflow/<version>/bin:$PATH"   # Claude Code install
+export PATH="<clone>/plugins/spec-workflow/bin:$PATH"                                   # a clone
 ```
 
 Don't use `SPEC="python3 .../spec.py"; $SPEC validate`: zsh doesn't word-split `$SPEC`. Use the wrappers, a shell function, or the full command. Agents spell out the full command in each Bash call, since shell state doesn't persist between calls.
@@ -51,7 +92,13 @@ Don't use `SPEC="python3 .../spec.py"; $SPEC validate`: zsh doesn't word-split `
 - **Mechanical**: spec hashes, generation-scoped evidence, gates (current-generation reviewer + later tester checks required, `not_run` blocks acceptance), dependency-ordered `ready`/`next`, parent-only requirement list, bug lifecycle, serialized CLI state changes, role-gated mutations, handoff order (implementer → reviewer → tester; fixer → reviewer → tester; implementer → tester only for newly added requirements after a prior review), light-path evidence rules, tool gaps, read-only tool allowlists, path guards, archive requirements, and recorded user decisions. Spec synchronization reconciles changed and removed imported requirements and invalidates stale evidence.
 - **Honor system**: `--parent-confirmed`, `--user-decision` content, and the record's `current_role` can be supplied or changed by any caller. The Bash guard catches redirections, `tee`, `cp`/`mv`/`rm`/`sed -i`-style writes, and the spec CLI, but not every way a script can write a file. The skills forbid all of this. Lane ownership fails open, with a warning, for an agent whose assignment is unknown (ambiguous role and no `claim`); hook input carries `agent_id`/`agent_type` but no prompt, so binding needs the brief's `claim` or a unique role. Whether the parent actually sends the brief verbatim is measured by `workflow-retro --conformance`, not enforced.
 
-## Changes from the OpenCode version
+## Maintaining both platforms
+
+The Claude Code plugin is the source. Edit `skills/`, `agents/`, and `hooks/` as usual; OpenCode reuses the skills and `guard_paths.py` as they are. After changing an agent or the version in `.claude-plugin/plugin.json`, run `python3 opencode/build.py`: it regenerates `opencode/agents/` and syncs the root `package.json` version. The tests fail while either is stale. Keep skill text in Claude Code terms; the plugin's mapping note translates them, so add a line to `mapping()` in `opencode/core.js` when a skill starts using a new Claude-only tool.
+
+`workflow-retro` reads Claude Code transcripts only.
+
+## Changes from the original OpenCode version
 
 - `code-structure` was removed; its project-relevant rules are folded into the implementer and reviewer skills.
 - The parent derives requirements from the spec before implementation. The implementer can no longer write its own checklist.
@@ -68,7 +115,7 @@ Don't use `SPEC="python3 .../spec.py"; $SPEC validate`: zsh doesn't word-split `
 
 ## Changes in 0.7.0
 
-Planner/executor split, validated by the m33 pilot on 0033/0034: executor peak context fell from 250–550k (Opus implementers) to about 96–141k (Sonnet), review still caught real bugs, and all 5 executor questions were plan gaps the parent answered.
+Planner/executor split, validated by a pilot project on 0033/0034: executor peak context fell from 250–550k (Opus implementers) to about 96–141k (Sonnet), review still caught real bugs, and all 5 executor questions were plan gaps the parent answered.
 
 - New role and agent `planner` (`spec-planner`, deep-reasoning tier, read-only). Plan template and mandatory checks (dependency trace, risks as steps, read-time fallbacks over rewrites, facts verified by command) in `spec-implementer/references/planning.md`.
 - Tracker: `plan add <feature> --from FILE|-` (validates the template), `plan show [--batch N] [--version V]`, plans stored in the record; `assign --from-plan`; `brief --batch N` carries one plan batch plus the ownership. `handoff --to implementer` needs a plan for more than 3 requirements or more than one area, unless `--parent-confirmed --reason`.
@@ -82,7 +129,7 @@ Planner/executor split, validated by the m33 pilot on 0033/0034: executor peak c
 
 ## Changes in 0.6.0
 
-Rules that drifted as prose in the m33 run are now enforced in code (#20–#25):
+Rules that drifted as prose in a pilot run are now enforced in code (#20–#25):
 
 - Lanes: `tracker assign <feature> --role <r> --paths <globs>|--read-only|--release --parent-confirmed`; `tracker claim <assignment>` (first command of a brief). The hook binds `agent_id` → assignment in `implementation/.assignments/` and denies subagent writes outside its paths or inside another active lane. Since 0.6.1 lane violations are advisory (warning + handoff note); set `SPEC_WORKFLOW_STRICT_LANES=1` to block.
 - Dependency start guard: `init` and `handoff --to implementer` refuse specs whose `depends_on`/`amends` aren't accepted, unless `--parent-confirmed --user-decision`.
@@ -122,10 +169,10 @@ Rules that drifted as prose in the m33 run are now enforced in code (#20–#25):
 ## Tests
 
 ```bash
-nix-shell -p 'python3.withPackages(ps: [ps.pytest])' --run 'python3 -m pytest tests/ -q'   # or: python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests     # includes the OpenCode plugin suite (node --test tests/opencode.test.mjs) when node is installed
 ```
 
-Compatibility tests copy `~/Prj/m33` (`SPEC_WORKFLOW_COMPAT_ROOT`) into a temp dir and skip if it is missing.
+Compatibility tests copy a real project with `specs/` and `implementation/` into a temp dir. Point `SPEC_WORKFLOW_COMPAT_ROOT` at one to run them; they are skipped otherwise.
 
 ## Changes in 0.7.1
 
@@ -150,7 +197,7 @@ The orchestrator prioritizes parallel work (user request 2026-10-27; also resolv
 
 ## Changes in 0.8.4
 
-From the 0.8.3 m33 retro (#44, #46, #51, #62–#65).
+From the 0.8.3 pilot retro (#44, #46, #51, #62–#65).
 
 - `spec-sync` re-imports itself and invalidates only requirements whose text changed (amended targets follow their citing requirement) plus new ones; unchanged requirements keep marks and evidence. The plan is kept and marked `stale` (`status`, briefs); `brief --batch N` still works with a warning. `requirement import` includes amended targets by default (`--exclude-amended` opts out; `--include-amended` is a no-op).
 - `brief` reissues a role's assignment that an earlier agent already claimed (same paths, stderr warning), so a fresh agent can always claim its brief.
@@ -159,3 +206,12 @@ From the 0.8.3 m33 retro (#44, #46, #51, #62–#65).
 - Tracker: `assign --role toolsmith --alongside` runs a toolsmith beside the active fixer on a disjoint lane; it ends with `tracker join`, and handoffs to review or test wait for it (#52).
 - workflow-retro: plugin-dev runs detected by description and plugin-source writes; spec attribution from claims and tracker commands first, and only existing `NNNN-<slug>` features; windows partition runs by start time, and `--compare` refuses overlapping reports without `--force` (#61).
 - workflow-retro: active time (API + tool time) beside wall time, Bash time per test/build/lint/other, a `tests.waiting` finding (test+build > 40% of active time), and exit-144 `pkill -f` / exit-127 missing-prefix and zsh word-split classes with fix hints.
+
+## Changes in 0.9.0
+
+OpenCode support from the same plugin; the separate OpenCode port is retired.
+
+- `opencode/plugin.js`: one file for OpenCode 1.x (named export: config hook for skills and agents, `tool.execute.before`, `shell.env`, system-prompt note) and 2.x (`setup`: `skill.transform`, `tool`/`shell`/`session` hooks). The guard is the same `hooks/guard_paths.py`, fed Claude-shaped events; child sessions are subagents.
+- `opencode/build.py` generates the 2.x agents from `agents/` and syncs the root `package.json` version; `opencode/install.sh` links them. Subagents can't nest (`task`/`subagent` denied); read-only roles can't edit.
+- Root `package.json` and `index.js` make the repository installable as an OpenCode plugin from Git.
+- Compatibility tests no longer default to a local project; set `SPEC_WORKFLOW_COMPAT_ROOT`.

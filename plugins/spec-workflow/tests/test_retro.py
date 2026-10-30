@@ -251,7 +251,7 @@ class AttributionTest(unittest.TestCase):
             main.prompt("go")
             main.assistant("m1", [{"type": "text", "text": "ok"}], usage(1, 1, 1, 1), stop="end_turn")
             main.write(transcripts / "main-1.jsonl")
-            source = "/home/u/Prj/ldgstack/plugins/spec-workflow"
+            source = "/home/u/src/ldgstack/plugins/spec-workflow"
             tracker = f"python3 {source}/skills/spec-tracker/scripts/spec_tracker.py"
             runs = {
                 "p1": ("general-purpose", "Plugin 0.8.0: spec parallelization", "Edit the planner.", []),

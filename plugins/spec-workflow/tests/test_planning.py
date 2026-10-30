@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_improvements import M33
+from test_improvements import COMPAT
 from test_retro import RETRO, Transcript, usage
 from test_workflow import FEATURE, PLUGIN, TRACKER, CliTestCase, spec_text
 
@@ -275,15 +275,15 @@ class RetroModelTest(unittest.TestCase):
         self.assertEqual({item["role"] for item in report["by_role"]}, {"implementer", "planner"})
 
 
-@unittest.skipUnless((M33 / "specs").is_dir() and (M33 / "implementation").is_dir(), "no compatibility fixture")
+@unittest.skipUnless((COMPAT / "specs").is_dir() and (COMPAT / "implementation").is_dir(), "no compatibility fixture")
 class PlanningCompatibilityTest(unittest.TestCase):
     """0.6.x records (no plans, questions, or planner role) keep working: validate, status, list, brief."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        shutil.copytree(M33 / "specs", self.root / "specs")
-        shutil.copytree(M33 / "implementation", self.root / "implementation")
+        shutil.copytree(COMPAT / "specs", self.root / "specs")
+        shutil.copytree(COMPAT / "implementation", self.root / "implementation")
         (self.root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
 
     def tearDown(self) -> None:

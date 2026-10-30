@@ -1,6 +1,6 @@
 """0.6.0: rules enforced in code - lanes, dependency start guard, plugin cache, audited spec edits, briefs, conformance, size budget.
 
-Motivated by the m33 run: 0026 started before 0025 was accepted, lane ownership was violated, the parent hot-patched the
+Motivated by a pilot run: 0026 started before 0025 was accepted, lane ownership was violated, the parent hot-patched the
 plugin cache and edited draft specs without the user, and hand-written prompts carried uneven rules.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_improvements import M33
+from test_improvements import COMPAT
 from test_retro import RETRO, Transcript, usage
 from test_workflow import FEATURE, GUARD, PLUGIN, TRACKER, CliTestCase, spec_text
 
@@ -352,13 +352,13 @@ class SizeBudgetTest(unittest.TestCase):
         self.assertIn("{claim_command}", brief.template())
 
 
-@unittest.skipUnless((M33 / "specs").is_dir() and (M33 / "implementation").is_dir(), "no compatibility fixture")
+@unittest.skipUnless((COMPAT / "specs").is_dir() and (COMPAT / "implementation").is_dir(), "no compatibility fixture")
 class EnforcementCompatibilityTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        shutil.copytree(M33 / "specs", self.root / "specs")
-        shutil.copytree(M33 / "implementation", self.root / "implementation")
+        shutil.copytree(COMPAT / "specs", self.root / "specs")
+        shutil.copytree(COMPAT / "implementation", self.root / "implementation")
         (self.root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
 
     def tearDown(self) -> None:
@@ -370,7 +370,7 @@ class EnforcementCompatibilityTest(unittest.TestCase):
         self.assertEqual(result["ok"], succeeds, result)
         return result
 
-    def test_m33_records_and_the_0026_early_start(self) -> None:
+    def test_pilot_records_and_the_0026_early_start(self) -> None:
         self.assertTrue(self.run_cli("spec", "validate")["result"]["valid"])
         for record in self.run_cli("spec-tracker", "status")["result"]:
             self.assertIn("pending", record)
@@ -381,7 +381,7 @@ class EnforcementCompatibilityTest(unittest.TestCase):
         status = self.run_cli("spec-tracker", "status", feature)["result"]
         if status["current_role"] != "parent":
             self.skipTest("0026 is no longer with the parent in this copy")
-        # m33 implemented 0026 before 0025 was accepted; the guard now refuses that without the user.
+        # The pilot implemented 0026 before 0025 was accepted; the guard now refuses that without the user.
         error = self.run_cli("spec-tracker", "handoff", feature, "--to", "implementer", "--completed", "c", "--remaining", "r", succeeds=False)
         self.assertIn("0025-agent-overview-and-edit-separation.md", error["error"]["message"])
         self.run_cli("spec-tracker", "handoff", feature, "--to", "implementer", "--completed", "c", "--remaining", "r",

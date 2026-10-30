@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_improvements import M33
+from test_improvements import COMPAT
 from test_planning import PLAN, PlanCase, body
 from test_workflow import FEATURE, PLUGIN, SPEC, CliTestCase, spec_text
 
@@ -156,16 +156,16 @@ class GuidanceTest(unittest.TestCase):
             self.assertIn(label, template)
 
 
-@unittest.skipUnless((M33 / "specs").is_dir(), "no compatibility fixture")
+@unittest.skipUnless((COMPAT / "specs").is_dir(), "no compatibility fixture")
 class TestabilityCompatibilityTest(unittest.TestCase):
-    """Existing m33 specs (no `workflow:` key) only produce warnings."""
+    """Existing fixture specs (no `workflow:` key) only produce warnings."""
 
     def test_existing_specs_only_warn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            shutil.copytree(M33 / "specs", root / "specs")
-            if (M33 / "implementation").is_dir():
-                shutil.copytree(M33 / "implementation", root / "implementation")
+            shutil.copytree(COMPAT / "specs", root / "specs")
+            if (COMPAT / "implementation").is_dir():
+                shutil.copytree(COMPAT / "implementation", root / "implementation")
             (root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
             process = subprocess.run([str(PLUGIN / "bin" / "spec"), "--json", "validate"], cwd=root, text=True, capture_output=True,
                                      env={**os.environ, "SPEC_WORKFLOW_ROOT": str(root)})

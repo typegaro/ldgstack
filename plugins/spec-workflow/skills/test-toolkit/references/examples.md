@@ -1,4 +1,4 @@
-# Motivating Examples (m33 run, specs 0021–0031)
+# Motivating Examples (pilot run, specs 0021–0031)
 
 Testers rebuilt these in the session scratchpad each round. Each should have been one registered tool.
 

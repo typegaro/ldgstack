@@ -1,9 +1,14 @@
 {
   "name": "spec-workflow",
-  "version": "0.8.4",
-  "description": "Spec-driven development: scope-preserving spec writing, adversarial spec review, an autonomous implement → independent test → fix → retest loop with hash-pinned specs and CLI-enforced gates, and a durable project test toolkit filled through recorded tool gaps.",
+  "version": "0.9.0",
+  "description": "Spec-driven development for Claude Code and OpenCode: scope-preserving spec writing, adversarial spec review, an autonomous implement → independent test → fix → retest loop with hash-pinned specs and CLI-enforced gates, and a durable project test toolkit filled through recorded tool gaps.",
   "author": {
     "name": "Lorenzo Di Giovanni"
   },
-  "keywords": ["specifications", "orchestration", "testing", "subagents"]
+  "keywords": [
+    "specifications",
+    "orchestration",
+    "testing",
+    "subagents"
+  ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "ldgstack",
-  "description": "Personal Claude Code skill collection.",
+  "description": "Agent skills for Claude Code and OpenCode.",
   "owner": {
     "name": "Lorenzo Di Giovanni"
   },
