@@ -225,3 +225,8 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 - **Bigger, parallel batches**: planners aim for 3–5 batches and mark `**Parallel:** yes` for disjoint ones (e.g. be and fe); `assign --parallel` runs them as separate executors of one spec, and the last handoff waits until the others are released (`assign --release --assignment ID`).
 - **Risk tiers and follow-ups**: `tracker risk <feature> high|normal` (briefs show `Risk:`). High keeps a fresh reviewer per fix round; normal resumes the finding reviewer on the fix diff. `bug follow-up` moves low bugs (medium with a user decision; never high or critical) out of the acceptance gate; `tracker follow-ups` lists them.
 - Focused tests per batch; the tester runs the full suite once and tears its stack down before handing off.
+
+## Changes in 0.10.1
+
+- Worktree mode: `toolkit verify` runs smokes in `<repo>/main` (`--feature F` for that spec's checkouts), briefs show toolkit commands in the spec's checkout, and `toolkit add|update --location <repo>/...` accepts a path that exists in any checkout.
+- `tracker abandon <feature> --reason --user-decision [--superseded-by ID]`: retire the record of a spec that is split or replaced before acceptance (kept in `implementation/abandoned/`, CLI-only); then `spec defer` it until the successor is accepted. Procedure: orchestrator procedures › Splitting or replacing an unaccepted spec.

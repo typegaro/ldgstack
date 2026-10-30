@@ -49,6 +49,10 @@ project/  specs/  implementation/workspace.json
 - **Conflicts:** add a bug ("merge conflict in <files>"), hand it to the fixer, who rebases the branch onto main in its checkout and reruns the focused tests; then review the fix and merge again. Migration numbers collide often: renumber in the branch, or use timestamped migrations.
 - **Abandon:** `worktree remove <feature> --force --user-decision "..." --parent-confirmed`.
 
+## Splitting or replacing an unaccepted spec
+
+With the user's decision: write the successors (`spec new --supersedes <old>` for the one that takes over, `--depends-on`/`--references` for the rest), then `tracker abandon <old feature> --reason "..." --user-decision "..." --superseded-by <new> --parent-confirmed` (the record moves to `implementation/abandoned/`, lanes are released, a worktree is kept) and `spec defer <old> --reason "..." --parent-confirmed` so `ready`/`next` skip it; it becomes `superseded` once the successor is accepted. Successors get new records, requirements, and plans: REQ numbers change, so the planner replans and may reuse the old plan (`tracker plan show <old>` before abandoning, or the abandoned record) as input. Code already written is carried into the successor's branch and marked implemented only after its executor checks it; tell the reviewer which files it covers when that code is already on main (it won't appear in `main...HEAD`).
+
 ## Resuming
 
 - An agent stopped early (rate limit, interruption): resume that same agent with SendMessage before spawning a new one.

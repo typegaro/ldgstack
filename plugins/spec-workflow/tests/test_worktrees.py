@@ -155,6 +155,52 @@ class WorktreeLifecycleTest(WorktreeCase):
         self.assertEqual(result["commands"], ["cd be/main && test -f internal/a.go", "cd fe/main/src && ls"])
 
 
+class ToolkitTest(WorktreeCase):
+    def test_smokes_and_brief_lines_run_in_a_checkout(self) -> None:
+        tool = self.root / "be" / "main" / "cmd" / "probe"
+        tool.mkdir(parents=True)
+        (tool / "main.sh").write_text("exit 0\n", encoding="utf-8")
+        self.tracker("toolkit", "add", "be-probe", "--capability", "be.inspect", "--command", "cd be && sh cmd/probe/main.sh",
+                     "--location", "be/cmd/probe", "--smoke", "cd be && test -f cmd/probe/main.sh", "--owner-spec", "0000", "--mode", "read-only")
+        self.assertEqual(self.tracker("toolkit", "verify", "be-probe")["result"]["failed"], [])  # runs in be/main
+
+        self.tracker("init", f"specs/{FEATURE}.md")
+        self.handoff("parent")
+        self.tracker("requirement", "add", FEATURE, "--spec-ref", "Required behavior", "--verification", "API call")
+        self.create()
+        branch_only = self.root / "be" / BRANCH / "cmd" / "fresh"
+        branch_only.mkdir(parents=True)
+        (branch_only / "main.sh").write_text("exit 0\n", encoding="utf-8")
+        self.tracker("toolkit", "add", "be-fresh", "--capability", "be.seed", "--command", "cd be && sh cmd/fresh/main.sh",
+                     "--location", "be/cmd/fresh", "--smoke", "cd be && test -f cmd/fresh/main.sh", "--owner-spec", "0000", "--mode", "read-only")
+        self.tracker("toolkit", "verify", "be-fresh", succeeds=False)  # not on main yet
+        self.assertEqual(self.tracker("toolkit", "verify", "be-fresh", "--feature", FEATURE)["result"]["failed"], [])
+
+        self.handoff("implementer")
+        self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "be/internal/**", "--parent-confirmed")
+        brief = self.tracker("brief", FEATURE, "--role", "implementer", "--parent-confirmed")["result"]
+        self.assertIn(f"read-only: cd be/{BRANCH} && sh cmd/probe/main.sh", brief)
+
+
+class AbandonTest(WorktreeCase):
+    def test_a_split_spec_leaves_the_queue_with_its_history(self) -> None:
+        self.tracker("init", f"specs/{FEATURE}.md")
+        self.create()
+        self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "be/internal/**", "--parent-confirmed")
+        self.tracker("abandon", FEATURE, "--reason", "split", "--parent-confirmed", succeeds=False)  # needs the user's decision
+        result = self.tracker("abandon", FEATURE, "--reason", "split into 0002 and 0003", "--user-decision", "split it",
+                              "--superseded-by", "2", "--parent-confirmed")["result"]
+        self.assertIn(f"kept: branch {BRANCH}", result["worktree"])
+        self.assertIn("spec defer 0", result["next"])
+        record = json.loads((self.root / "implementation" / "abandoned" / f"{FEATURE}.json").read_text(encoding="utf-8"))
+        self.assertEqual((record["status"], record["abandoned"]["superseded_by"]), ("abandoned", ["0002"]))
+        self.assertTrue(all(item["status"] == "released" for item in record["assignments"]))
+        self.assertFalse((self.root / "implementation" / "active" / f"{FEATURE}.json").exists())
+        self.spec("defer", "0", "--reason", "split into 0002 and 0003", "--parent-confirmed")
+        self.assertNotEqual((self.spec("next")["result"] or {}).get("id"), 0)
+        self.assertEqual(self.guard(f"implementation/abandoned/{FEATURE}.json").returncode, 2)
+
+
 class TestSlotTest(WorktreeCase):
     def to_tester(self, feature: str) -> None:
         self.feature = feature

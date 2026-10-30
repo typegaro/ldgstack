@@ -21,8 +21,8 @@ from tracker import paths as lanes  # noqa: E402
 from tracker import workspace  # noqa: E402
 
 ROOT_MARKERS = ("CLAUDE.md", "AGENTS.md", ".git")
-STATE_PATHS = ("implementation/active/", "implementation/archive/", "implementation/spec-archive.json", "implementation/toolkit.json",
-               "implementation/.assignments/")
+STATE_PATHS = ("implementation/active/", "implementation/archive/", "implementation/abandoned/", "implementation/spec-archive.json",
+               "implementation/toolkit.json", "implementation/.assignments/")
 CACHE_ENV = "SPEC_WORKFLOW_PLUGIN_CACHE"
 CACHE_DENIAL = ("The plugin cache is a release artifact; never patch it. Edit the plugin source, bump its version, then "
                 "`claude plugin marketplace update <marketplace> && claude plugin update <plugin>@<marketplace>`.")

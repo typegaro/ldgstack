@@ -22,8 +22,9 @@ from tracker.model import (
     review_skip_errors, spec_matches, touch,
 )
 from tracker.store import (
-    TrackerError, digest, feature_name, find_root, load, load_all, project_lock, record_path, remove, save, spec_path,
+    TrackerError, digest, feature_name, find_root, load, load_all, project_lock, record_path, remove, save, spec_path, write_atomic,
 )
+from tracker.render import markdown
 
 Record = dict[str, Any]
 BUG_FIELDS = ("spec_ref", "environment", "reproduction", "expected", "actual", "evidence")
@@ -149,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify = kit.add_parser("verify", help="run smoke tests; fails if any fails")
     verify.add_argument("names", nargs="*")
     verify.add_argument("--timeout", type=int, default=toolkit.SMOKE_TIMEOUT)
+    verify.add_argument("--feature", help="worktree mode: run the smokes in this spec's checkouts (default: <repo>/main)")
     retire = kit.add_parser("remove", help="unregister a tool")
     retire.add_argument("name")
     retire.add_argument("--reason", required=True)
@@ -210,6 +212,11 @@ def build_parser() -> argparse.ArgumentParser:
     command(commands, "spec-sync", confirmed=True).add_argument("--reason", required=True)
     command(commands, "archive", confirmed=True)
     command(commands, "restore", confirmed=True)
+    retire = command(commands, "abandon", confirmed=True,
+                     help="retire a record whose spec won't be implemented as written (split or replaced); kept in implementation/abandoned/")
+    retire.add_argument("--reason", required=True)
+    retire.add_argument("--user-decision", required=True)
+    retire.add_argument("--superseded-by", type=int, action="append", default=[], metavar="ID", help="the spec(s) that take over (repeatable)")
     return parser
 
 
@@ -712,7 +719,10 @@ def toolkit_command(root: Path, args: argparse.Namespace) -> Any:
         return toolkit.update(root, args, now())
     if args.action == "remove":
         return toolkit.remove(root, args)
-    result = toolkit.verify(root, args.names, args.timeout, now())
+    tree = load(root, args.feature).get("worktree") if args.feature else None
+    if args.feature and not tree:
+        raise TrackerError(f"{args.feature} has no worktree; drop --feature to verify on main")
+    result = toolkit.verify(root, args.names, args.timeout, now(), tree["branch"] if tree else None)
     if result["failed"]:
         tails = "; ".join(f"{item['name']}: {item.get('output_tail', '')}" for item in result["results"] if not item["passed"])
         raise TrackerError(f"toolkit smoke failed: {tails}")
@@ -1038,6 +1048,34 @@ def archive(root: Path, args: argparse.Namespace) -> Record:
     save(root, record, archived=True)
     remove(root, record["feature"])
     return {"feature": record["feature"], "archived": True, **({"removed_worktrees": removed} if removed else {})}
+
+
+def abandon(root: Path, args: argparse.Namespace) -> Record:
+    """A spec split or replaced before acceptance: its record leaves the queue but keeps its history."""
+    record = load(root, args.feature)
+    require_confirmation(args.parent_confirmed, "abandoning a record")
+    if not args.user_decision.strip():
+        raise TrackerError("abandoning a record needs the user's decision (--user-decision \"<the user's words>\")")
+    target = root / "implementation" / "abandoned"
+    if (target / f"{record['feature']}.json").exists():
+        raise TrackerError(f"implementation/abandoned/{record['feature']}.json already exists")
+    for item in record.get("assignments", []):
+        if item["status"] == "active":
+            item.update(status="released", released_at=now(), released_by="abandon")
+    record["abandoned"] = {"at": now(), "from_status": record["status"], "reason": args.reason, "user_decision": args.user_decision,
+                           "superseded_by": [f"{target_id:04d}" for target_id in args.superseded_by]}
+    record.update(status="abandoned", current_role="parent")
+    touch(record)
+    target.mkdir(parents=True, exist_ok=True)
+    write_atomic(target / f"{record['feature']}.json", json.dumps(record, indent=2, sort_keys=True) + "\n")
+    write_atomic(target / f"{record['feature']}.md", markdown(record))
+    remove(root, record["feature"])
+    spec_id = int(record["feature"][:4]) if record["feature"][:4].isdigit() else record["feature"]
+    tree = record.get("worktree")
+    return {"feature": record["feature"], "abandoned": True,
+            **({"worktree": f"kept: branch {tree['branch']} ({', '.join(tree['repos'])}); carry its commits into the new spec's branch, "
+                            f"then `git worktree remove` it"} if tree and not tree.get("removed_at") else {}),
+            "next": f"`spec defer {spec_id} --reason \"...\" --parent-confirmed` so ready/next skip it until its successor is accepted"}
 
 
 def restore(root: Path, args: argparse.Namespace) -> Record:
@@ -1470,7 +1508,7 @@ def status(root: Path, args: argparse.Namespace) -> Any:
 HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "init": initialize, "status": status, "list": status, "requirement": requirement, "file": changed_file,
     "check": check, "bug": bug, "blocker": blocker, "handoff": handoff, "gate": gate,
-    "spec-check": spec_check, "spec-sync": spec_sync, "archive": archive, "restore": restore, "overlap": overlap,
+    "spec-check": spec_check, "spec-sync": spec_sync, "archive": archive, "restore": restore, "abandon": abandon, "overlap": overlap,
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
     "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
 }

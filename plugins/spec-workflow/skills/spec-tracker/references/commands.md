@@ -34,6 +34,8 @@ tracker worktree create 0000-project-bootstrap [--repos be fe] [--base <branch>]
 tracker worktree status [0000-project-bootstrap]                       # changes, ahead/behind main, merged, test slot holder
 tracker worktree merge 0000-project-bootstrap --parent-confirmed       # after the acceptance gate; all repos or none
 tracker worktree remove 0000-project-bootstrap [--force --user-decision "..."] --parent-confirmed
+tracker toolkit verify [name ...] [--feature 0000-project-bootstrap]   # worktree mode: smokes run in <repo>/main, or that spec's checkouts
+tracker abandon 0000-project-bootstrap --reason "..." --user-decision "..." [--superseded-by 87] --parent-confirmed   # split/replaced spec; record kept in implementation/abandoned/
 ```
 
 Worktree mode (`implementation/workspace.json`) and the test slot are described in the orchestrator procedures. A tester brief refuses while `test_slots` other specs are being tested (`--parent-confirmed --user-decision` overrides).

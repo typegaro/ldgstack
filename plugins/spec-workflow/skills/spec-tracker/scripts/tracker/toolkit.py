@@ -8,6 +8,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import workspace
 from .store import TrackerError, write_atomic
 
 SCHEMA_VERSION = 1
@@ -57,13 +58,36 @@ def provides(tool: dict[str, Any], wanted: str) -> bool:
     return any(item == wanted or item.startswith(wanted + ".") for item in tool["capabilities"])
 
 
+def localize(root: Path, command: str, branch: str | None = None) -> str:
+    """Worktree mode: `cd <repo>` runs in `<repo>/<branch>` (default `<repo>/main`)."""
+    try:
+        config = workspace.load(root)
+    except workspace.WorkspaceError as error:
+        raise TrackerError(str(error)) from error
+    return workspace.rewrite(config, command, branch or config["main"]) if config else command
+
+
+def exists(root: Path, relative: PurePosixPath) -> bool:
+    """In worktree mode a repo-relative location (`be/cmd/x`) exists when any checkout (`be/<branch>/cmd/x`) has it."""
+    try:
+        config = workspace.load(root)
+    except workspace.WorkspaceError:
+        config = None
+    if (root / relative).exists():
+        return True
+    if config is None or len(relative.parts) < 2 or relative.parts[0] not in config["repos"] or not (root / relative.parts[0]).is_dir():
+        return False
+    rest = PurePosixPath(*relative.parts[1:])
+    return any((checkout / rest).exists() for checkout in (root / relative.parts[0]).iterdir() if checkout.is_dir())
+
+
 def location(root: Path, value: str) -> str:
     relative = PurePosixPath(value)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise TrackerError(f"location must be a relative path inside the project: {value}")
     if relative.parts[0] in FORBIDDEN_LOCATIONS:
         raise TrackerError(f"toolkit tools may not live under {relative.parts[0]}/")
-    if not (root / relative).exists():
+    if not exists(root, relative):
         raise TrackerError(f"location does not exist yet; build the tool first: {value}")
     return relative.as_posix()
 
@@ -136,15 +160,16 @@ def remove(root: Path, args: Any) -> dict[str, Any]:
     return {"name": args.name, "removed": True}
 
 
-def verify(root: Path, names: list[str], timeout: int, timestamp: str) -> dict[str, Any]:
-    """Run smoke commands from the project root. Stores only the result, never the output (it may hold secrets)."""
+def verify(root: Path, names: list[str], timeout: int, timestamp: str, branch: str | None = None) -> dict[str, Any]:
+    """Run smoke commands from the project root (worktree mode: in `<repo>/main`, or `branch`'s checkouts).
+    Stores only the result, never the output (it may hold secrets)."""
     manifest = load(root)
     chosen = [find(manifest, name) for name in names] if names else list(manifest["tools"])
     results = []
     for tool in chosen:
         started = time.monotonic()
         try:
-            process = subprocess.run(tool["smoke"], shell=True, cwd=root, capture_output=True, text=True, timeout=timeout)
+            process = subprocess.run(localize(root, tool["smoke"], branch), shell=True, cwd=root, capture_output=True, text=True, timeout=timeout)
             passed, output = process.returncode == 0, (process.stdout + process.stderr).strip()
         except subprocess.TimeoutExpired:
             passed, output = False, f"timed out after {timeout}s"
@@ -158,11 +183,11 @@ def verify(root: Path, names: list[str], timeout: int, timestamp: str) -> dict[s
     return {"verified": len(results), "failed": failed, "results": results}
 
 
-def summary(root: Path) -> dict[str, Any]:
-    """One compact line per tool for delegation prompts."""
+def summary(root: Path, branch: str | None = None) -> dict[str, Any]:
+    """One compact line per tool for delegation prompts (worktree mode: commands point at `branch`'s checkouts)."""
     tools = load(root)["tools"]
     return {
         "tools": len(tools),
         "stale": sorted(tool["name"] for tool in tools if stale(tool)),
-        "lines": [f"{tool['name']} [{', '.join(tool['capabilities'])}] {tool.get('mode', '?')}: {tool['command']}" for tool in tools],
+        "lines": [f"{tool['name']} [{', '.join(tool['capabilities'])}] {tool.get('mode', '?')}: {localize(root, tool['command'], branch)}" for tool in tools],
     }

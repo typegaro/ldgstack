@@ -248,7 +248,7 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
     carved = [f"{item['glob']} (carved out to {item['to']}, {item['feature']})" for item in own.get("carved", [])]
     ownership += f", except {', '.join(carved)}" if carved else ""
     ownership += f"; do not touch {', '.join(foreign)}" if foreign else ""
-    kit = toolkit.summary(root)
+    kit = toolkit.summary(root, tree["branch"] if tree else None)
     gaps = [f"{item['id']} {item['capability']} for {', '.join(item['requirements'])}" for item in open_tool_gaps(record)]
     values = {
         "marker": MARKER, "spec_path": record["specification"]["path"], "spec_cli": f"python3 {SPEC_CLI}",
