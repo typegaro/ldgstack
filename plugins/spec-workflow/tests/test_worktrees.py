@@ -32,10 +32,11 @@ class WorktreeCase(CliTestCase):
             git(main, "config", "user.name", "Test")
             git(main, "add", "-A")
             git(main, "commit", "-q", "-m", "Initial")
-        (self.root / "be" / "main" / ".env").write_text("DATABASE_URL=dev\n", encoding="utf-8")
+        (self.root / "be" / "main" / ".env").write_text("PORT=1\nexport DATABASE_URL=postgres://dev/m33\n", encoding="utf-8")
         implementation = self.root / "implementation"
         implementation.mkdir()
-        (implementation / "workspace.json").write_text(json.dumps({"repos": ["be", "fe"], "copy": {"be": [".env"]}}), encoding="utf-8")
+        (implementation / "workspace.json").write_text(json.dumps({"repos": ["be", "fe"], "copy": {"be": [".env"]},
+                                                                           "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}}}), encoding="utf-8")
         (implementation / "preflight.json").write_text(json.dumps({"commands": ["cd be && test -f internal/a.go", "cd fe/src && ls"]}),
                                                       encoding="utf-8")
 
@@ -57,7 +58,8 @@ class WorktreeLifecycleTest(WorktreeCase):
         self.assertEqual((result["branch"], result["base"]), (BRANCH, "main"))
         checkout = self.root / "be" / BRANCH
         self.assertEqual(git(checkout, "branch", "--show-current"), BRANCH)
-        self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), "DATABASE_URL=dev\n")
+        # Copied, but never pointing the checkout at the shared dev database.
+        self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), "PORT=1\nexport DATABASE_URL=postgres://localhost/none\n")
         self.assertTrue((self.root / "fe" / BRANCH / "src" / "app.ts").is_file())
         self.assertFalse(self.create()["checkouts"][0]["created"])  # idempotent
         lane = self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "be/internal/**", "--parent-confirmed")["result"]

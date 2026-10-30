@@ -247,3 +247,7 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 ## Changes in 0.10.5
 
 - Worktree mode: commands that run inside one repo checkout and reach a sibling repo as `../<repo>` (e.g. `cd be && ... ../fe/tools/x.mjs`) now resolve to `../../<repo>/<branch>` when that repo has a checkout for the spec, else `../../<repo>/main`. Applies to briefs, `toolkit verify`, and `spec preflight`.
+
+## Changes in 0.10.6
+
+- Worktree mode: `env` in workspace.json overrides keys in copied dotenv files (`{"env": {"be": {".env": {"DATABASE_URL": "..."}}}}`), so spec checkouts can't reach the dev database. In m33 a checkout that inherited `.env` migrated the dev database to an unmerged branch's migration; the documented example now overrides it.

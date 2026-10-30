@@ -2,7 +2,10 @@
 accepted code and `<repo>/<branch>` per spec. Shared by the tracker, the path-guard hook, and preflight.
 
     {"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}", "test_slots": 1,
-     "copy": {"be": [".env"]}, "setup": {"fe": ["direnv allow", "direnv exec . npm ci"]}}
+     "copy": {"be": [".env"]}, "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}},
+     "setup": {"fe": ["direnv allow", "direnv exec . npm ci"]}}
+
+`env` overrides keys in copied dotenv files, so a spec checkout never points at shared dev or production state.
 
 Lane globs stay repo-relative (`be/internal/**`); in a worktree they select `be/<branch>/internal/**`."""
 from __future__ import annotations
@@ -35,7 +38,8 @@ def load(root: Path) -> dict[str, Any] | None:
     if not isinstance(repos, list) or not repos or not all(isinstance(repo, str) and NAME.match(repo) for repo in repos):
         raise WorkspaceError(f'{CONFIG} needs "repos": ["<folder>", ...] (plain folder names)')
     config = {"repos": repos, "main": data.get("main", "main"), "branch": data.get("branch", "spec-{id}-{slug}"),
-              "test_slots": data.get("test_slots", 1), "copy": data.get("copy") or {}, "setup": data.get("setup") or {}}
+              "test_slots": data.get("test_slots", 1), "copy": data.get("copy") or {}, "setup": data.get("setup") or {},
+              "env": data.get("env") or {}}
     if not isinstance(config["test_slots"], int) or config["test_slots"] < 1:
         raise WorkspaceError(f'{CONFIG}: "test_slots" must be a positive integer')
     return config
@@ -115,13 +119,29 @@ def create(root: Path, config: dict[str, Any], repo: str, branch: str, base: str
         source = main / name
         if source.is_file() and not (target / name).exists():
             (target / name).parent.mkdir(parents=True, exist_ok=True)
-            (target / name).write_bytes(source.read_bytes())
+            overrides = config["env"].get(repo, {}).get(name)
+            if overrides:
+                (target / name).write_text(override_env(source.read_text(encoding="utf-8"), overrides), encoding="utf-8")
+            else:
+                (target / name).write_bytes(source.read_bytes())
             copied.append(name)
     for command in config["setup"].get(repo, []):
         process = subprocess.run(command, shell=True, cwd=target, capture_output=True, text=True, timeout=SETUP_TIMEOUT)
         if process.returncode != 0:
             raise WorkspaceError(f"setup `{command}` failed in {repo}/{branch}: {(process.stderr or process.stdout).strip()[-400:]}")
     return {"repo": repo, "path": f"{repo}/{branch}", "created": True, "base": base, "copied": copied}
+
+
+def override_env(text: str, overrides: dict[str, str]) -> str:
+    """Set each key in a dotenv text (`KEY=...` or `export KEY=...`), appending keys that are missing."""
+    lines, seen = text.splitlines(), set()
+    for index, line in enumerate(lines):
+        match = re.match(r"^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+        if match and match.group(2) in overrides:
+            lines[index] = f"{match.group(1)}{match.group(2)}={overrides[match.group(2)]}"
+            seen.add(match.group(2))
+    lines += [f"{key}={value}" for key, value in overrides.items() if key not in seen]
+    return "\n".join(lines) + "\n"
 
 
 def checkpoint(root: Path, repo: str, branch: str, message: str) -> bool:

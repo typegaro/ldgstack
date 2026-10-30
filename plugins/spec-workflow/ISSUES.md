@@ -433,3 +433,7 @@ The 2026-10-30 retro tagged 41 of 57 runs `plugin_dev`, so its per-spec table co
 ### 82. Parallel executor handoff released its siblings' lanes (0.10.0–0.10.2)
 In 0082 batch 4's executor ran `handoff --to parent` while batch 6's executor (`--parallel`) was working; the handoff released every executor lane. A later `brief` for a batch without its own lane reissued a sibling's lane, and the next `assign --parallel` then collided with it.
 **Resolved (0.10.3):** `join --assignment`, the handoff refusal while siblings are active, and the batch-lane check in `brief`.
+
+### 83. Copied `.env` pointed spec checkouts at the dev database (0.10.0–0.10.5)
+The suggested `copy: {"be": [".env"]}` gave every checkout the dev `DATABASE_URL`; an agent in a spec checkout migrated the dev database to the branch's migration 51 before merge.
+**Resolved (0.10.6):** `env` overrides in workspace.json and a procedures rule; m33 also rewrites the URL in a `setup` step.

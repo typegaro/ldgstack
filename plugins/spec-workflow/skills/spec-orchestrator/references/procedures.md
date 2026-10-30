@@ -39,10 +39,12 @@ project/  specs/  implementation/workspace.json
 
 ```json
 {"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}", "test_slots": 1,
- "copy": {"be": [".env"]}, "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]}}
+ "copy": {"be": [".env"]}, "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}},
+ "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]}}
 ```
 
 - **Adopt** (with the user, between specs, no agent running): commit or stash each repo, then `mv be be.tmp && mkdir be && mv be.tmp be/main` per repo, update paths that pointed at `be/` (scripts, compose files, project instructions), write `workspace.json`, run `spec preflight` (it runs `cd <repo>` commands in `<repo>/main`).
+- **Copied env files never point at shared state.** A spec checkout that inherits the dev `DATABASE_URL` (or any shared database, queue, bucket, or production credential) lets an agent migrate or write the dev environment with unaccepted code. Override every such key with `env` (it rewrites the copied dotenv file), so tests reach only isolated stacks (`env.isolate`).
 - **Per spec:** `tracker worktree create <feature> --parent-confirmed` before the first writer (`--repos` defaults to the plan's ownership; the base is an unmerged dependency's branch, else main). `copy` brings untracked files (e.g. `.env`) and `setup` runs per new checkout. Briefs point toolchain commands and the `Worktree:` line at the checkouts. Lane globs stay repo-relative.
 - **Rounds:** each writer handoff commits a checkpoint on the branch; reviewers diff `main...HEAD`. `tracker worktree status` shows changes, commits ahead/behind main, merged state, and who holds the test slot.
 - **Accept:** gate acceptance, `worktree merge` (checks every repo with `git merge-tree` and merges all or nothing), `spec preflight`, then `archive` (needs the merge; removes checkouts and branches). Dependent branches rebase onto main afterwards.

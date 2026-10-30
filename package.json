@@ -1,6 +1,6 @@
 {
   "name": "spec-workflow",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Spec-driven development for OpenCode: scope-preserving specs, an implement → review → test → fix loop, and CLI-enforced gates.",
   "type": "module",
   "main": "plugins/spec-workflow/opencode/plugin.js",
