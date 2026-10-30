@@ -35,6 +35,8 @@ Look for what behavior tests rarely catch:
 - One `bug add` per concrete defect: exact file and line, the spec or convention it violates, why it matters, and how to demonstrate it (a failing test idea, or a runtime reproduction).
 - A specification problem gets a blocker, not a bug.
 - Preferences and style aren't bugs. Mention valuable ideas in your report.
+- Rate severity honestly: hygiene, wording, and test-only nits are `low`; the parent may move low bugs to follow-ups instead of a fix round.
+- Resumed for a fix review (normal risk, the brief's `Risk:`): check only the fix diff since your review (`git log`/`git diff` on the branch) against the bugs you filed; file new bugs only for defects the fix introduced.
 - When done, record a `check add --name code-review --result passed` whose evidence lists the areas you reviewed, even if you filed bugs. The check means "the review was performed".
 
 ## Handoff

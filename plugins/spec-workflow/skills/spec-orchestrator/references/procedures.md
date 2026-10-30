@@ -27,6 +27,28 @@ It refuses accepted specs (amend them with a new spec, or `unlock` with a user d
 
 Before each delegation: `tracker assign <feature> --role <role> --paths <glob> ... --parent-confirmed` (reviewer/tester: `--read-only`). Globs are project-relative; `**` crosses directories; a glob without wildcards owns its whole subtree. `assign` refuses paths overlapping another active lane. The brief's first command (`tracker claim <assignment>`) binds the agent; the path-guard hook then denies its writes outside its paths and inside other lanes. When exactly one active assignment has the agent's role, the hook binds automatically. An unknown assignment is allowed with a warning. `assign --release` ends a lane; `archive` releases all of a record's lanes.
 
+## Worktree mode
+
+Each code repository is a folder of branch checkouts: `<repo>/main` holds accepted code, `<repo>/<branch>` one spec's work. `specs/` and `implementation/` stay in the project root (shared state).
+
+```text
+project/  specs/  implementation/workspace.json
+  be/main/   be/spec-0083-git-ssh-keys/
+  fe/main/   fe/spec-0083-git-ssh-keys/
+```
+
+```json
+{"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}", "test_slots": 1,
+ "copy": {"be": [".env"]}, "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]}}
+```
+
+- **Adopt** (with the user, between specs, no agent running): commit or stash each repo, then `mv be be.tmp && mkdir be && mv be.tmp be/main` per repo, update paths that pointed at `be/` (scripts, compose files, project instructions), write `workspace.json`, run `spec preflight` (it runs `cd <repo>` commands in `<repo>/main`).
+- **Per spec:** `tracker worktree create <feature> --parent-confirmed` before the first writer (`--repos` defaults to the plan's ownership; the base is an unmerged dependency's branch, else main). `copy` brings untracked files (e.g. `.env`) and `setup` runs per new checkout. Briefs point toolchain commands and the `Worktree:` line at the checkouts. Lane globs stay repo-relative.
+- **Rounds:** each writer handoff commits a checkpoint on the branch; reviewers diff `main...HEAD`. `tracker worktree status` shows changes, commits ahead/behind main, merged state, and who holds the test slot.
+- **Accept:** gate acceptance, `worktree merge` (checks every repo with `git merge-tree` and merges all or nothing), `spec preflight`, then `archive` (needs the merge; removes checkouts and branches). Dependent branches rebase onto main afterwards.
+- **Conflicts:** add a bug ("merge conflict in <files>"), hand it to the fixer, who rebases the branch onto main in its checkout and reruns the focused tests; then review the fix and merge again. Migration numbers collide often: renumber in the branch, or use timestamped migrations.
+- **Abandon:** `worktree remove <feature> --force --user-decision "..." --parent-confirmed`.
+
 ## Resuming
 
 - An agent stopped early (rate limit, interruption): resume that same agent with SendMessage before spawning a new one.

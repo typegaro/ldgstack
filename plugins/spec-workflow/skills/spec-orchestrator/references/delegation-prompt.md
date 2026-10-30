@@ -7,7 +7,9 @@
 Spec: {spec_path} (effective text: {spec_cli} show {spec_id} --effective)
 Role: {role}
 Feature: {feature}
+Risk: {risk}
 Status: {status} (current role: {current_role})
+Worktree: {worktree}
 Scope: {scope}
 Plan: {plan}
 Decisions: {decisions}

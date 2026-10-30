@@ -215,3 +215,13 @@ OpenCode support from the same plugin; the separate OpenCode port is retired.
 - `opencode/build.py` generates the 2.x agents from `agents/` and syncs the root `package.json` version; `opencode/install.sh` links them. Subagents can't nest (`task`/`subagent` denied); read-only roles can't edit.
 - Root `package.json` and `index.js` make the repository installable as an OpenCode plugin from Git.
 - Compatibility tests no longer default to a local project; set `SPEC_WORKFLOW_COMPAT_ROOT`.
+
+## Changes in 0.10.0
+
+Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one working tree, testing runs one spec at a time, and small findings stop driving review rounds.
+
+- **Worktree mode** (`implementation/workspace.json`): each code repo is a folder of checkouts, `<repo>/main` (accepted code) and `<repo>/<branch>` per spec. `tracker worktree create|status|merge|remove`; writer handoffs commit a checkpoint on the branch; reviewers diff `main...HEAD`; `worktree merge` checks every repo with `git merge-tree` and merges all or nothing after the acceptance gate; `archive` needs the merge and removes the checkouts. A dependent spec starts from its dependency's branch. Briefs gain a `Worktree:` line and run toolchain commands in the checkout; `spec preflight` runs them in `<repo>/main`. The guard denies subagent edits to `<repo>/main/` and compares lanes only inside one checkout, so specs no longer contend for files (`assign` reports `merge_risk` instead). Setup and adoption: orchestrator procedures › Worktree mode.
+- **One test slot**: `test_slots` (default 1). `brief --role tester` refuses while another spec's tester is at work; implementation and review keep running in parallel.
+- **Bigger, parallel batches**: planners aim for 3–5 batches and mark `**Parallel:** yes` for disjoint ones (e.g. be and fe); `assign --parallel` runs them as separate executors of one spec, and the last handoff waits until the others are released (`assign --release --assignment ID`).
+- **Risk tiers and follow-ups**: `tracker risk <feature> high|normal` (briefs show `Risk:`). High keeps a fresh reviewer per fix round; normal resumes the finding reviewer on the fix diff. `bug follow-up` moves low bugs (medium with a user decision; never high or critical) out of the acceptance gate; `tracker follow-ups` lists them.
+- Focused tests per batch; the tester runs the full suite once and tears its stack down before handing off.

@@ -23,8 +23,9 @@ HANDOFFS = {
 }
 SEVERITIES = ("critical", "high", "medium", "low")
 CHECK_RESULTS = ("passed", "failed", "not_run", "not_applicable")
-BUG_STATUSES = ("open", "assigned", "fixed", "verified", "closed_not_a_bug")
-TERMINAL_BUG_STATUSES = {"verified", "closed_not_a_bug"}
+BUG_STATUSES = ("open", "assigned", "fixed", "verified", "closed_not_a_bug", "follow_up")
+# A follow-up bug is real but deferred out of the acceptance gate (low severity, or medium with a user decision).
+TERMINAL_BUG_STATUSES = {"verified", "closed_not_a_bug", "follow_up"}
 BUG_TRANSITIONS = {
     # action: (role allowed, statuses the bug may be in)
     "assign": ("parent", {"open"}),
@@ -32,7 +33,10 @@ BUG_TRANSITIONS = {
     "verify": ("tester", {"fixed"}),
     "reopen": ("tester", {"fixed", "verified"}),
     "close": ("parent", {"open", "assigned", "fixed"}),
+    "follow-up": ("parent", {"open", "assigned"}),
 }
+# high: security, data, migration, or concurrency; every review round is a fresh reviewer.
+RISK_TIERS = ("normal", "high")
 
 
 def now() -> str:

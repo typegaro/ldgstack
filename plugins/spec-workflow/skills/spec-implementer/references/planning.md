@@ -50,8 +50,9 @@ A plan turns one spec into batches that an efficient execution model follows lit
 ## Batches
 
 - Write `**Requires:**` on every batch: `none` when it touches nothing a still-unaccepted dependency provides, else the spec IDs it needs accepted. A spec started early (`init --early`) runs only batches whose required specs are accepted; a batch without the line counts as requiring all of them. Put `none` batches first.
-- Each batch builds, passes its tests, and leaves the tree consistent on its own. Order them so later batches only add.
-- Put every requirement in exactly one batch. Keep batches small enough for one executor turn sequence (about 3–8 requirements, one or two areas).
+- Each batch builds, passes its focused tests (the packages and pages it touches, not the full suite), and leaves the tree consistent on its own. Order them so later batches only add.
+- Put every requirement in exactly one batch. Aim for **3–5 batches per spec**: each a coherent slice one fresh executor finishes under ~150k context (often 6–15 requirements in one area). Tiny batches cost a re-read of spec, plan, and code each.
+- Mark a batch `**Parallel:** yes` when it can run beside the batch before it: disjoint files (typically a `be/` batch and an `fe/` batch) and no need for the other's output. The parent then runs them as parallel executors; the batch after them integrates.
 - Name exact files and symbols. "Update the loader" is a gap; "`be/internal/chat/store.go` `loadRun`: add `subagent_count` to the SELECT and scan" is a step.
 - Name the `check add` names the executor records, so retests can re-record the same names.
 

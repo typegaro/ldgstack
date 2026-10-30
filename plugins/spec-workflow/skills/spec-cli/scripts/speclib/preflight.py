@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,19 @@ from typing import Any
 from .errors import SpecError
 
 TIMEOUT_SECONDS = 300
+WORKSPACE = "implementation/workspace.json"
+
+
+def on_main(root: Path, command: str) -> str:
+    """Worktree mode (spec-tracker's workspace.json): `cd <repo>` runs in the accepted `<repo>/<main>` checkout."""
+    try:
+        config = json.loads((root / WORKSPACE).read_text(encoding="utf-8"))
+        repos, main = list(config["repos"]), str(config.get("main", "main"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return command
+    for repo in repos:
+        command = re.sub(rf"(\bcd\s+){re.escape(repo)}(?=[/\s;&|)]|$)", rf"\g<1>{repo}/{main}", command)
+    return command
 
 
 def run(root: Path) -> dict[str, Any]:
@@ -23,6 +37,7 @@ def run(root: Path) -> dict[str, Any]:
     if not isinstance(commands, list) or not commands or not all(isinstance(item, str) and item.strip() for item in commands):
         raise SpecError('preflight.json must be {"commands": ["<shell command>", ...]} with at least one command')
 
+    commands = [on_main(root, item) for item in commands]
     results = []
     for item in commands:
         try:

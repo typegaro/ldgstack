@@ -25,7 +25,18 @@ tracker tool-gap list [0000-project-bootstrap] [--open]
 tracker toolkit list [--capability C] | summary | verify [name ...]
 tracker toolkit add|update <name> --capability C --command "..." --location be/cmd/<tool> --smoke "..." --owner-spec 0022 --mode read-only|mutating [--guard "..."]
 tracker toolkit remove <name> --reason "..."
+tracker risk 0000-project-bootstrap high|normal --parent-confirmed      # high: fresh reviewer each round; normal: one review, then the fix diff
+tracker bug follow-up 0000-project-bootstrap BUG-... --reason "..." --parent-confirmed [--user-decision "..."]   # low (medium with a decision) leaves the gate
+tracker follow-ups                                                     # follow-up bugs in active and archived records
+tracker assign 0000-project-bootstrap --role implementer --from-plan --batch 2 --parallel --parent-confirmed   # one more executor, disjoint lane
+tracker assign 0000-project-bootstrap --release --assignment ASSIGN-... --parent-confirmed                  # end one parallel lane
+tracker worktree create 0000-project-bootstrap [--repos be fe] [--base <branch>] --parent-confirmed   # <repo>/<branch> checkouts
+tracker worktree status [0000-project-bootstrap]                       # changes, ahead/behind main, merged, test slot holder
+tracker worktree merge 0000-project-bootstrap --parent-confirmed       # after the acceptance gate; all repos or none
+tracker worktree remove 0000-project-bootstrap [--force --user-decision "..."] --parent-confirmed
 ```
+
+Worktree mode (`implementation/workspace.json`) and the test slot are described in the orchestrator procedures. A tester brief refuses while `test_slots` other specs are being tested (`--parent-confirmed --user-decision` overrides).
 
 The toolkit manifest (`implementation/toolkit.json`) is project-wide and CLI-only; see `test-toolkit` for capabilities and tool rules. Gap IDs are `GAP-<feature>-NNN`; `resolve` and `defer` take the qualified ID alone, or `<feature> GAP-NNN`.
 

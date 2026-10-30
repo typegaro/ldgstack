@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from . import plan as plans
-from . import toolkit
+from . import toolkit, workspace
 from .model import latest_checks, open_tool_gaps
 from .store import TrackerError
 
@@ -27,12 +27,30 @@ def template() -> str:
     return match.group(1)
 
 
-def toolchain(root: Path) -> str:
+def toolchain(root: Path, config: dict[str, Any] | None = None, branch: str | None = None) -> str:
     try:
         commands = json.loads((root / "implementation" / "preflight.json").read_text(encoding="utf-8"))["commands"]
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise TrackerError("implementation/preflight.json is missing or malformed; create it with the user and run `spec preflight`") from error
+    if config:
+        commands = [workspace.rewrite(config, command, branch or config["main"]) for command in commands]
     return "\n".join(f"  - {command}" for command in commands)
+
+
+def worktree(record: dict[str, Any], config: dict[str, Any] | None, role: str) -> str:
+    if config is None:
+        return "none: every spec shares the project's working tree"
+    tree = record.get("worktree")
+    branch, main = (tree or {}).get("branch"), config["main"]
+    if not tree:
+        return f"not created yet; {', '.join(repo + '/' + main + '/' for repo in config['repos'])} is accepted code: read it, never edit it"
+    paths = ", ".join(f"{repo}/{branch}/" for repo in tree["repos"])
+    text = (f"{paths} (branch {branch}, from {tree['base']}). Work and run commands only there; Ownership globs are repo-relative "
+            f"(`{tree['repos'][0]}/x/**` means `{tree['repos'][0]}/{branch}/x/**`). `<repo>/{main}/` is accepted code: never edit it.")
+    if role in ("reviewer", "fixer"):
+        text += " Changes under review: " + "; ".join(f"`git -C {repo}/{branch} diff {main}...HEAD`" for repo in tree["repos"])
+        text += f" (each writer handoff commits a checkpoint; `git log {main}..HEAD` lists the rounds)."
+    return text
 
 
 def batch_ids(record: dict[str, Any], value: str) -> list[str]:
@@ -128,12 +146,14 @@ def next_command(tracker: str, feature: str, role: str, final: bool, batch: str 
     return handoff.format(target="tester") + "   (blocked: --to parent)"
 
 
-def assignment_for(record: dict[str, Any], role: str, tracker: str) -> dict[str, Any]:
+def assignment_for(record: dict[str, Any], role: str, tracker: str, batch: str | None = None) -> dict[str, Any]:
     active = [item for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == role]
     if not active:
         paths = "--read-only" if role in ("reviewer", "tester", "planner") else "--from-plan" if plans.latest(record) else "--paths <glob> [<glob> ...]"
         raise TrackerError(f"no active {role} assignment; run `{tracker} assign {record['feature']} --role {role} {paths} --parent-confirmed`")
-    return active[-1]
+    number = plan_batch(record, batch) if role == "implementer" and batch else None
+    # Parallel executors (#78) each hold the lane assigned for their batch.
+    return next((item for item in reversed(active) if number is not None and item.get("batch") == number), active[-1])
 
 
 def implementer_guard(record: dict[str, Any], batch: str | None, confirmed: bool, tracker: str) -> None:
@@ -213,8 +233,17 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         implementer_guard(record, batch, confirmed, tracker)
     final = final or bool(batch and plan_batch(record, batch) is not None and plans.latest(record)
                           and plan_batch(record, batch) == len(plans.latest(record)["batches"]))
-    own = assignment_for(record, role, tracker)
-    foreign = sorted({glob for item in others for glob in item.get("paths", [])})
+    own = assignment_for(record, role, tracker, batch)
+    try:
+        config = workspace.load(root)
+    except workspace.WorkspaceError as error:
+        raise TrackerError(str(error)) from error
+    tree = record.get("worktree")
+    if tree:
+        # Other specs edit their own worktrees; only shared-tree lanes (and this spec's parallel executors) are off limits.
+        others = [item for item in others if not item.get("branch")]
+    siblings = [item for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == role and item["id"] != own["id"]]
+    foreign = sorted({glob for item in others + siblings for glob in item.get("paths", [])})
     ownership = f"edit only {', '.join(own['paths'])}" if own["paths"] else "read-only: edit nothing in the project"
     carved = [f"{item['glob']} (carved out to {item['to']}, {item['feature']})" for item in own.get("carved", [])]
     ownership += f", except {', '.join(carved)}" if carved else ""
@@ -228,7 +257,8 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         "scope": scope(record, role, batch, final),
         "first_turn": first_turn(record, role, batch, f"python3 {SPEC_CLI} show {int(feature[:4]) if feature[:4].isdigit() else feature} --effective"), "decisions": decisions(record), "plan": plan_text(record, role, batch, tracker),
         "assignment": f"{own['id']} ({own['role']})", "claim_command": f"{tracker} claim {own['id']}",
-        "ownership": ownership, "toolchain": toolchain(root), "tracker": tracker,
+        "ownership": ownership, "toolchain": toolchain(root, config, tree["branch"] if tree else None), "tracker": tracker,
+        "worktree": worktree(record, config, role), "risk": record.get("risk", "normal"),
         "toolkit": "\n".join(f"  - {line}{' (stale)' if line.split(' ', 1)[0] in kit['stale'] else ''}" for line in kit["lines"]) or "  none registered",
         "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side),
     }

@@ -401,3 +401,30 @@ After `spec-sync` re-imported two requirements for a wording-only R1 edit (code 
 ### 75. Failed checks can't be waived, and carve rejects zsh-unsplit path lists (parent friction)
 - `check waive` only accepts a `not_run` check, so a check that failed for another spec's reason (a parallel lane's regression) can only be cleared by fixing the other lane and re-running. Consider `check waive --supersede-failed` with a recorded cause and owner spec.
 - `assign --paths $VAR` in zsh passes one argument containing spaces; the tracker stores it as one bogus glob instead of rejecting it. Reject paths containing whitespace.
+
+## Throughput (m33 run 2026-10-30: "why are features slow?")
+
+About 17 h of agent wall time over 57 runs; tests and builds ≈30% of active time. The time went to serial scheduling, review ping-pong, and one shared working tree, not to testing.
+
+### 76. One shared working tree couples every spec
+In-progress code from one spec broke another's checks (0081's decoder change blocked 0085's handoff), lanes fought over shared files (stack.go, config.go, main.go) and needed carves, every full-suite run hit unrelated failures, and a subagent auto-migrated the dev DB by running cmd/server with be/.env.
+- **Fix:** worktree mode (`implementation/workspace.json`). Each code repo is a folder of branch checkouts: `<repo>/main` (accepted code) and `<repo>/<branch>` per spec. `tracker worktree create|status|merge|remove`; handoffs from writers commit a checkpoint; merge in acceptance order; dev deploys only from `main`. Lanes are per worktree, so specs no longer contend for files.
+
+### 77. Tests from parallel specs overload the machine
+The laptop runs one Docker test stack comfortably. Implementation and review can run in parallel; testing must not.
+- **Fix:** `test_slots` in workspace.json (default 1). `brief --role tester` refuses while another spec's tester holds a slot.
+
+### 78. Serial, tiny batches per spec
+0081 took 13 executor runs (≈7.2 h) back to back. Plans had 9–12 small batches, each a fresh agent re-reading spec, plan, and code; be and fe batches with disjoint files couldn't run together.
+- **Fix:** planners aim for 3–5 batches; `assign --parallel` runs several executors of one spec on disjoint lanes (e.g. be and fe), joined at the handoff to review.
+
+### 79. Review → fix → re-review ping-pong on small findings
+0085 (small) took 6 review rounds for 9 mostly-low bugs. Each round is a fix, a fresh review, and a retest.
+- **Fix:** risk tiers (`tracker risk <feature> high|normal`). High (security, data, migration, concurrency) keeps fresh reviewers every round. Normal: one full review, then the same reviewer resumed on the fix diff. `bug follow-up` moves low bugs (medium with a user decision) out of the acceptance gate into a follow-up list.
+
+### 80. Full suites at batch boundaries; fragile environment
+Full-suite runs at every batch boundary, and ≈3.5 h of toolsmith time on Docker address pools, missing browser libraries, and racing restarts.
+- **Fix:** focused tests per batch; full suite once by the tester before acceptance and preflight after each merge. Preflight should check environment health (stale networks and stacks) before a run. Projects should make the server refuse auto-migration without an explicit flag.
+
+### 81. Retro flags most of a normal run as plugin development (open)
+The 2026-10-30 retro tagged 41 of 57 runs `plugin_dev`, so its per-spec table covered two specs. Check the 0.8.4 plugin-source-write detection against runs that only call the CLIs from a local marketplace checkout.

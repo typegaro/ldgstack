@@ -58,7 +58,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 ## 4. Verification and handoff
 
 1. Mark each requirement with `requirement implemented --evidence --location`.
-2. Run formatting, generation, static analysis, architecture checks, and unit and integration tests, and record each with `check add`. Run independent checks at the same time:
+2. Run formatting, generation, static analysis, architecture checks, and the unit and integration tests for what you changed (focused: the packages and pages your batch touches; the tester runs the full suite once), and record each with `check add`. Work and run commands only in the brief's `Worktree:` checkout; never edit `<repo>/main`, and never start the server against the dev database (use the isolated environment). Run independent checks at the same time:
    - use the project's parallel runner (`test.runner`) or background commands;
    - start the slow suites (e2e, audits) first, and do the quick checks while they run.
 
@@ -80,7 +80,8 @@ When assigned as fixer:
 - Reproduce each bug from its recorded steps before changing code. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
 - Add a regression test that fails without the fix. Record `bug fixed` with the fix and that test.
 - Never verify your own fix.
-- Run the relevant checks, then `handoff --to reviewer`; every fix generation receives a fresh review before independent retest.
+- Run the relevant checks, then `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest.
+- A merge-conflict bug: in your worktree, `git rebase <main>`, resolve, rerun the focused tests, and record the resolution as the fix.
 
 ## Completion report
 

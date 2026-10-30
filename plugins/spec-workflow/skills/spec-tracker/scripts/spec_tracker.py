@@ -14,8 +14,9 @@ from tracker import deps, toolkit
 from tracker import paths as lanes
 from tracker import plan as plans
 from tracker import requirements as spec_requirements
+from tracker import workspace
 from tracker.model import (
-    BUG_TRANSITIONS, CHECK_RESULTS, HANDOFFS, ROLES, SEVERITIES,
+    BUG_TRANSITIONS, CHECK_RESULTS, HANDOFFS, RISK_TIERS, ROLES, SEVERITIES,
     bump_generation, find_item, gate_errors, generation, generation_has_work, invalidate_item, latest_checks, next_id, not_run_checks, now,
     open_blockers, open_questions, open_tool_gaps, parent_attested, parent_status, require_confirmation, require_role,
     review_skip_errors, spec_matches, touch,
@@ -89,6 +90,23 @@ def build_parser() -> argparse.ArgumentParser:
     close = command(bugs, "close", item=True, confirmed=True)
     close.add_argument("--reason", required=True)
     close.add_argument("--user-decision", required=True)
+    follow = command(bugs, "follow-up", item=True, confirmed=True,
+                     help="move a low bug (medium with --user-decision) out of the acceptance gate into the follow-up list")
+    follow.add_argument("--reason", required=True)
+    follow.add_argument("--user-decision")
+    commands.add_parser("follow-ups", help="bugs moved to follow-up, in active and archived records")
+    risk = command(commands, "risk", confirmed=True, help="high: fresh reviewer every round; normal: one full review, then the fix diff")
+    risk.add_argument("tier", choices=RISK_TIERS)
+
+    trees = group(commands, "worktree")
+    create = command(trees, "create", confirmed=True, help="add <repo>/<branch> checkouts for this spec (workspace.json)")
+    create.add_argument("--repos", nargs="+", help="default: the repos the plan's ownership names, else every repo")
+    create.add_argument("--base", help="branch to start from; default: an unmerged dependency's branch, else main")
+    trees.add_parser("status", help="every spec worktree: changes, commits ahead of main, merged").add_argument("feature", nargs="?")
+    command(trees, "merge", confirmed=True, help="merge the spec's branches into <repo>/main (after the acceptance gate)")
+    drop = command(trees, "remove", confirmed=True, help="remove the spec's checkouts and merged branches")
+    drop.add_argument("--force", action="store_true", help="also unmerged or dirty checkouts (needs --user-decision)")
+    drop.add_argument("--user-decision")
 
     blockers = group(commands, "blocker")
     blocker_add = command(blockers, "add")
@@ -159,7 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
     lane = assign.add_mutually_exclusive_group()
     lane.add_argument("--paths", nargs="+", metavar="GLOB", help="project-relative globs (** crosses directories)")
     lane.add_argument("--read-only", action="store_true", help="the agent may edit nothing in the project")
-    lane.add_argument("--release", action="store_true", help="end this record's active assignment")
+    lane.add_argument("--release", action="store_true", help="end this record's active assignments (or only --assignment ID)")
+    assign.add_argument("--assignment", metavar="ID", help="with --release: end only this assignment (e.g. one parallel executor)")
+    assign.add_argument("--parallel", action="store_true",
+                        help="implementer: keep this spec's other active executor lanes (lanes must be disjoint); one per plan batch")
     lane.add_argument("--from-plan", action="store_true", help="use the latest plan's ownership globs")
     assign.add_argument("--batch", type=int, metavar="N", help="with --from-plan on an early record: the plan batch the lane is for")
     assign.add_argument("--carve", action="append", metavar="GLOB", help="take this narrow glob out of another spec's active lane (--from) and grant it here (repeatable)")
@@ -223,6 +244,8 @@ def summary(record: Record, root: Path | None = None) -> Record:
         **early,
         "feature": record["feature"], "status": record["status"], "current_role": record["current_role"],
         **({"side_role": record["side_role"]} if record.get("side_role") else {}),
+        "risk": record.get("risk", "normal"),
+        **({"branch": record["worktree"]["branch"]} if record.get("worktree") else {}),
         "generation": generation(record),
         "requirements": {
             "total": len(requirements),
@@ -582,6 +605,13 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
             item.update(status="verified", retest=args.retest)
         elif args.action == "reopen":
             item.update(status="open", evidence=f"{item['evidence']} | Reopened: {args.evidence}", fix="", regression="", retest="")
+        elif args.action == "follow-up":
+            require_confirmation(args.parent_confirmed, "moving a bug to follow-up")
+            if item["severity"] in ("critical", "high"):
+                raise TrackerError(f"{item['id']} is {item['severity']}: it must be fixed (or closed with a user decision), not deferred")
+            if item["severity"] == "medium" and not args.user_decision:
+                raise TrackerError(f"{item['id']} is medium: a follow-up needs the user's decision (--user-decision \"<the user's words>\")")
+            item.update(status="follow_up", follow_up=args.reason, **({"user_decision": args.user_decision} if args.user_decision else {}))
         else:
             require_confirmation(args.parent_confirmed, "closing a bug as not a bug")
             item.update(status="closed_not_a_bug", retest=args.reason, user_decision=args.user_decision)
@@ -790,6 +820,18 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
             if not gaps:
                 raise TrackerError("no open tool gaps for toolsmith")
             record["status"] = "tooling"
+        writers = [item["id"] for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer"]
+        if source == "implementer" and target != "parent" and len(writers) > 1:
+            raise TrackerError(f"parallel executors still hold lanes ({', '.join(writers)}); the parent releases each finished one "
+                               f"(`tracker assign {record['feature']} --release --assignment <ID> --parent-confirmed`) before the last hands off")
+        tree = record.get("worktree")
+        if tree and source != target and source in {"implementer", "fixer", "toolsmith"}:
+            # The branch holds every round, so reviewers diff it against main and the merge has one source.
+            try:
+                for repo in tree["repos"]:
+                    workspace.checkpoint(root, repo, tree["branch"], f"{record['feature']} {source} {generation(record)}")
+            except workspace.WorkspaceError as error:
+                raise TrackerError(str(error)) from error
         if source != target and source in {"implementer", "fixer", "toolsmith"}:
             # A finished writer frees its lane so parallel specs can claim those paths (#51).
             for item in record.get("assignments", []):
@@ -976,6 +1018,18 @@ def archive(root: Path, args: argparse.Namespace) -> Record:
         raise TrackerError("archive blocked: " + "; ".join(errors))
     if record_path(root, record["feature"], archived=True).exists():
         raise TrackerError("archived implementation record already exists")
+    tree, removed = record.get("worktree"), []
+    config = workspace_config(root, required=False)
+    if tree and config:
+        try:
+            unmerged = [repo for repo in tree["repos"] if not workspace.merged(root / repo / config["main"], tree["branch"])]
+            if unmerged:
+                raise TrackerError(f"archive blocked: {tree['branch']} is not merged in {', '.join(unmerged)}; "
+                                   f"`tracker worktree merge {record['feature']} --parent-confirmed` first (in acceptance order)")
+            removed = remove_worktree(root, config, tree, False, None)
+        except workspace.WorkspaceError as error:
+            raise TrackerError(str(error)) from error
+        tree["removed_at"] = now()
     record.update(status="accepted", current_role="parent")
     for item in record.get("assignments", []):
         if item["status"] == "active":
@@ -983,7 +1037,7 @@ def archive(root: Path, args: argparse.Namespace) -> Record:
     touch(record)
     save(root, record, archived=True)
     remove(root, record["feature"])
-    return {"feature": record["feature"], "archived": True}
+    return {"feature": record["feature"], "archived": True, **({"removed_worktrees": removed} if removed else {})}
 
 
 def restore(root: Path, args: argparse.Namespace) -> Record:
@@ -1070,23 +1124,49 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
     globs = list(dict.fromkeys(globs + carves))
     result: dict[str, Any] = {}
 
+    config = workspace_config(root, required=False)
+    if args.parallel and args.role != "implementer":
+        raise TrackerError("--parallel runs several executors (implementer) of one spec; use --alongside for a toolsmith beside the fixer")
+    if args.assignment and not args.release:
+        raise TrackerError("--assignment ID goes with --release")
+
     def change(record: Record) -> None:
         require_confirmation(args.parent_confirmed, "assigning paths")
+        tree = record.get("worktree")
+        if config and not args.release and args.role in {"implementer", "fixer", "toolsmith"} and globs and not tree:
+            raise TrackerError(f"worktree mode: writers work in the spec's branch; `tracker worktree create {record['feature']} --parent-confirmed` first")
         if override:
             record.setdefault("dependency_overrides", []).append(override)
         items = record.setdefault("assignments", [])
+        if args.release and args.assignment:
+            item = next((item for item in items if item["id"] == args.assignment and item["status"] == "active"), None)
+            if item is None:
+                raise TrackerError(f"{args.assignment} is not an active assignment of {record['feature']}")
+            item.update(status="released", released_at=now())
+            return
         side = record.get("side_role")
         if args.alongside:
             alongside_guard(record, args.role)
         for item in items:
             # The side lane survives a reassignment of the main role (and vice versa with --alongside); --release ends both.
-            keep = not args.release and (args.alongside or (side and item["role"] == side))
+            # --parallel keeps the spec's other executor lanes (#78).
+            keep = not args.release and (args.alongside or (side and item["role"] == side) or (args.parallel and item["role"] == "implementer"))
             if item["status"] == "active" and not keep:
                 item.update(status="released", released_at=now())
         if args.release:
             record.pop("side_role", None)
             return
+        if args.parallel:
+            shared = [f"{ours} overlaps {theirs} ({item['id']})" for item in items if item["status"] == "active" and item["role"] == "implementer"
+                      for ours, theirs in lanes.overlap(globs, item.get("paths") or [])]
+            if shared:
+                raise TrackerError("--parallel needs a lane disjoint from the spec's other executors: " + "; ".join(shared))
         others = [other for other in lanes.active_assignments(root) if other["feature"] != record["feature"]]
+        if tree:
+            # Specs in their own worktrees never share files; overlap only predicts merge conflicts.
+            result["merge_risk"] = [f"{ours} ~ {theirs} ({other['feature']})" for other in others if other.get("branch")
+                                    for ours, theirs in lanes.lane_overlap(globs, other)]
+            others = [other for other in others if not other.get("branch")]
         if args.alongside:
             mine = [item for item in items if item["status"] == "active"]
             shared = [f"{ours} overlaps {theirs} ({item['id']})" for item in mine for ours, theirs in lanes.overlap(globs, item.get("paths") or [])]
@@ -1108,7 +1188,8 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
         if clashes:
             raise overlap_error(root, clashes, record["feature"], args.role, tracker)
         item = {"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": globs, "status": "active", "at": now(),
-                **({"alongside": True} if args.alongside else {})}
+                **({"alongside": True} if args.alongside else {}), **({"branch": tree["branch"]} if tree else {}),
+                **({"batch": args.batch} if args.batch else {})}
         if source is not None:
             item["carved_from"] = [{"glob": glob, "from": source["id"], "feature": source["feature"]} for glob in carves]
             carve(root, source, carves, item["id"], record["feature"])
@@ -1170,6 +1251,9 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
             raise TrackerError(f"the record is with the {record['current_role']}; run `handoff {record['feature']} --to {args.role} ...` first")
         items = record.setdefault("assignments", [])
         active = [item for item in items if item["status"] == "active" and item["role"] == args.role]
+        number = briefs.plan_batch(record, args.batch) if args.role == "implementer" and getattr(args, "batch", None) else None
+        # With parallel executors, only the brief's own batch lane is renewed.
+        active = [item for item in active if item.get("batch") == number] or active if number is not None else active
         latest_plan = plans.latest(record)
         carved: list[Record] = []
         if active:
@@ -1184,8 +1268,10 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
             raise TrackerError(f"no {args.role} assignment to renew; run `spec-tracker assign {record['feature']} --role {args.role} --paths ... --parent-confirmed`")
         for item in active:
             item.update(status="released", released_at=now(), released_by=reason)
+        tree = record.get("worktree")
         items.append({"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": paths, "status": "active", "at": now(), "fresh": True,
-                      **({"carved": carved} if carved else {})})
+                      **({"carved": carved} if carved else {}), **({"branch": tree["branch"]} if tree else {}),
+                      **({"batch": number} if number is not None and any(item.get("batch") == number for item in active) else {})})
 
     edit(root, args.feature, set(ROLES), change)
 
@@ -1197,11 +1283,15 @@ def brief(root: Path, args: argparse.Namespace) -> str:
         override = early_gate(root, record, plan_batches(record, number, True), args.parent_confirmed, args.user_decision, "brief")
         if override:
             edit(root, args.feature, set(ROLES), lambda item: item.setdefault("dependency_overrides", []).append(override))
+    if args.role == "tester":
+        test_slot(root, record, args)
     if args.fresh:
         fresh_assignment(root, args)
     elif args.role in (record["current_role"], record.get("side_role")):
         # Every brief starts a new agent (a resumed agent keeps its claim), so a claimed assignment is reissued (#46, #63).
-        held = [item["id"] for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == args.role]
+        own = briefs.assignment_for(record, args.role, "spec-tracker", args.batch) if any(
+            item["status"] == "active" and item["role"] == args.role for item in record.get("assignments", [])) else None
+        held = [own["id"]] if own else []
         if held and lanes.claimed(root, held[-1]):
             fresh_assignment(root, args, "brief: claimed by an earlier agent")
             print(f"warning: {held[-1]} was claimed by an earlier agent; issued a new assignment with the same paths for this brief. "
@@ -1212,6 +1302,163 @@ def brief(root: Path, args: argparse.Namespace) -> str:
         print(f"warning: {stale}", file=sys.stderr)
     others = [item for item in lanes.active_assignments(root) if item["feature"] != record["feature"]]
     return briefs.render(root, record, args.role, args.batch, args.final_batch, others, args.parent_confirmed)
+
+
+def set_risk(root: Path, args: argparse.Namespace) -> Record:
+    def change(record: Record) -> None:
+        require_confirmation(args.parent_confirmed, "setting the risk tier")
+        record["risk"] = args.tier
+
+    return edit(root, args.feature, set(ROLES), change)
+
+
+def follow_ups(root: Path, _args: argparse.Namespace) -> list[Record]:
+    found = []
+    for archived in (False, True):
+        for path in sorted((root / "implementation" / ("archive" if archived else "active")).glob("*.json")):
+            record = load(root, path.stem, archived=archived)
+            found += [{"feature": record["feature"], "bug": item["id"], "severity": item["severity"], "title": item["title"],
+                       "reason": item.get("follow_up", "")} for item in record["bugs"] if item["status"] == "follow_up"]
+    return found
+
+
+def workspace_config(root: Path, required: bool = True) -> Record | None:
+    try:
+        config = workspace.load(root)
+    except workspace.WorkspaceError as error:
+        raise TrackerError(str(error)) from error
+    if config is None and required:
+        raise TrackerError(f"no {workspace.CONFIG}: worktree mode is off (all specs share one working tree)")
+    return config
+
+
+def testing(root: Path, record: Record) -> bool:
+    """The record's tester is at work: the record is with the tester and an agent claimed its assignment."""
+    return record["current_role"] == "tester" and any(
+        item["status"] == "active" and item["role"] == "tester" and lanes.claimed(root, item["id"]) for item in record.get("assignments", []))
+
+
+def test_slot(root: Path, record: Record, args: argparse.Namespace) -> None:
+    """#77: specs are implemented and reviewed in parallel, but only `test_slots` testers (default 1) run at once."""
+    config = workspace_config(root, required=False)
+    if config is None:
+        return
+    busy = [other["feature"] for other in load_all(root) if other["feature"] != record["feature"] and testing(root, other)]
+    if len(busy) >= config["test_slots"] and not (args.parent_confirmed and args.user_decision):
+        raise TrackerError(f"test slot busy: {', '.join(busy)} is being tested (test_slots: {config['test_slots']} in {workspace.CONFIG}). "
+                           "Brief this tester when that one hands off; keep implementing and reviewing other specs meanwhile. "
+                           "Override only with --parent-confirmed --user-decision \"<the user's words>\".")
+
+
+def plan_repos(config: Record, record: Record) -> list[str]:
+    named = {glob.split("/", 1)[0] for glob in (plans.latest(record, any_generation=True) or {}).get("ownership", [])}
+    return [repo for repo in config["repos"] if repo in named] or list(config["repos"])
+
+
+def dependency_base(root: Path, record: Record) -> str | None:
+    """A spec that builds on an unmerged spec starts from that spec's branch."""
+    targets = {f"{target:04d}-" for target in deps.prerequisites(root / record["specification"]["path"])}
+    branches = sorted({other["worktree"]["branch"] for other in load_all(root)
+                       if other["feature"][:5] in targets and other.get("worktree") and not other["worktree"].get("merged_at")})
+    if len(branches) > 1:
+        raise TrackerError(f"dependencies are on several unmerged branches ({', '.join(branches)}); pass --base <branch>")
+    return branches[0] if branches else None
+
+
+def worktree(root: Path, args: argparse.Namespace) -> Any:
+    config = workspace_config(root)
+    assert config is not None
+    if args.action == "status":
+        return worktree_status(root, config, args.feature)
+    record = load(root, args.feature)
+    require_confirmation(args.parent_confirmed, f"worktree {args.action}")
+    tree = record.get("worktree") or {}
+    try:
+        if args.action == "create":
+            branch = tree.get("branch") or workspace.branch_name(config, record["feature"])
+            repos = args.repos or plan_repos(config, record)
+            unknown = [repo for repo in repos if repo not in config["repos"]]
+            if unknown:
+                raise TrackerError(f"unknown repos {', '.join(unknown)}; {workspace.CONFIG} lists {', '.join(config['repos'])}")
+            base = args.base or tree.get("base") or dependency_base(root, record) or config["main"]
+            made = [workspace.create(root, config, repo, branch, base) for repo in repos]
+            all_repos = [repo for repo in config["repos"] if repo in set(tree.get("repos", [])) | set(repos)]
+
+            def change(item: Record) -> None:
+                item["worktree"] = {**tree, "branch": branch, "repos": all_repos, "base": base, "created_at": tree.get("created_at") or now()}
+                for lane in item.get("assignments", []):
+                    if lane["status"] == "active":
+                        lane["branch"] = branch
+
+            edit(root, args.feature, set(ROLES), change)
+            return {"feature": record["feature"], "branch": branch, "base": base, "checkouts": made}
+        if not tree:
+            raise TrackerError(f"{record['feature']} has no worktree; `tracker worktree create {record['feature']} --parent-confirmed` first")
+        if args.action == "merge":
+            return merge_worktree(root, config, record, tree)
+        return {"feature": record["feature"], "removed": remove_worktree(root, config, tree, args.force, args.user_decision)}
+    except workspace.WorkspaceError as error:
+        raise TrackerError(str(error)) from error
+
+
+def worktree_status(root: Path, config: Record, feature: str | None) -> Record:
+    rows = []
+    for record in [load(root, feature)] if feature else load_all(root):
+        tree = record.get("worktree")
+        for repo in tree["repos"] if tree else []:
+            branch, main = tree["branch"], root / repo / config["main"]
+            if not (root / repo / branch).is_dir():
+                rows.append({"feature": record["feature"], "path": f"{repo}/{branch}", "state": "missing"})
+                continue
+            count = workspace.git(main, "rev-list", "--left-right", "--count", f"HEAD...{branch}").stdout.split()
+            rows.append({"feature": record["feature"], "path": f"{repo}/{branch}", "status": record["status"],
+                         "changes": len(workspace.dirty(root / repo / branch)), "ahead": int(count[1]), "behind": int(count[0]),
+                         "merged": workspace.merged(main, branch)})
+    return {"worktrees": rows, "testing": [record["feature"] for record in load_all(root) if testing(root, record)],
+            "test_slots": config["test_slots"]}
+
+
+def merge_worktree(root: Path, config: Record, record: Record, tree: Record) -> Record:
+    """Merge in acceptance order: the gate must pass, every repo must merge cleanly, then all of them merge."""
+    errors = gate_errors(root, record, "acceptance")
+    if errors:
+        raise TrackerError("merge after the acceptance gate passes: " + "; ".join(errors))
+    branch = tree["branch"]
+    clashes = []
+    for repo in tree["repos"]:
+        main = workspace.main_checkout(root, config, repo)
+        workspace.checkpoint(root, repo, branch, f"{record['feature']} final")
+        if workspace.git(main, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+            raise TrackerError(f"{repo}/{config['main']} has uncommitted changes; commit or stash them before merging")
+        clashes += [f"{repo}/{name}" for name in workspace.conflicts(main, branch)]
+    if clashes:
+        repos = " and ".join(f"`git -C {repo}/{branch} rebase {config['main']}`" for repo in tree["repos"])
+        raise TrackerError(f"merge conflicts: {', '.join(clashes)}. Nothing was merged. Resolve in the branch ({repos}, or assign the "
+                           "fixer a conflict bug), rerun the focused tests, then merge again.")
+    merged = []
+    for repo in tree["repos"]:
+        main = root / repo / config["main"]
+        if not workspace.merged(main, branch):
+            workspace.git(main, "merge", "--no-ff", "-m", f"Merge {branch}", branch)
+            merged.append(repo)
+    edit(root, record["feature"], set(ROLES), lambda item: item["worktree"].update(merged_at=now()))
+    return {"feature": record["feature"], "branch": branch, "merged": merged,
+            "next": "run `spec preflight` (it checks main), then `tracker archive`; dependent branches rebase onto main"}
+
+
+def remove_worktree(root: Path, config: Record, tree: Record, force: bool, decision: str | None) -> list[str]:
+    if force and not decision:
+        raise TrackerError("--force discards unmerged work: it needs --user-decision \"<the user's words>\"")
+    removed = []
+    for repo in tree["repos"]:
+        main, path = root / repo / config["main"], root / repo / tree["branch"]
+        if not force and not workspace.merged(main, tree["branch"]):
+            raise TrackerError(f"{repo}/{tree['branch']} is not merged into {config['main']}; merge it, or --force with a user decision")
+        if path.is_dir():
+            workspace.git(main, "worktree", "remove", *(["--force"] if force else []), str(path))
+            removed.append(f"{repo}/{tree['branch']}")
+        workspace.git(main, "branch", "-D" if force else "-d", tree["branch"], check=False)
+    return removed
 
 
 def status(root: Path, args: argparse.Namespace) -> Any:
@@ -1225,7 +1472,7 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "check": check, "bug": bug, "blocker": blocker, "handoff": handoff, "gate": gate,
     "spec-check": spec_check, "spec-sync": spec_sync, "archive": archive, "restore": restore, "overlap": overlap,
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
-    "plan": plan_command, "answer": answer, "join": join,
+    "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
 }
 
 

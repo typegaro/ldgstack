@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "spec-tracker" / "scripts"))
 from tracker import paths as lanes  # noqa: E402
+from tracker import workspace  # noqa: E402
 
 ROOT_MARKERS = ("CLAUDE.md", "AGENTS.md", ".git")
 STATE_PATHS = ("implementation/active/", "implementation/archive/", "implementation/spec-archive.json", "implementation/toolkit.json",
@@ -141,10 +142,30 @@ def ownership_denial(root: Path, relative: str, event: dict) -> str | None:
     """Subagent writes must fall inside the agent's assignment and outside every other active assignment."""
     if not is_subagent(event) or relative.startswith("specs/") or relative.startswith("implementation/"):
         return None
+    try:
+        config = workspace.load(root)
+    except workspace.WorkspaceError as error:
+        WARNINGS.append(f"spec-workflow: {error}")
+        config = None
+    checkout = workspace.split(config, relative) if config else None
+    if checkout and checkout[1] == config["main"]:
+        return (f"{checkout[0]}/{config['main']}/ is accepted code, changed only by `spec-tracker worktree merge`; "
+                f"work in your spec's checkout ({checkout[0]}/<branch>/, the brief's Worktree line).")
     active = lanes.active_assignments(root)
     if not active:
         return None
     own = own_assignment(root, event, active)
+    if checkout and own is not None:
+        branch = own.get("branch")
+        if branch and checkout[1] != branch:
+            problem = f"{relative} is in another spec's checkout; your assignment {own['id']} works in {checkout[0]}/{branch}/."
+            if os.environ.get("SPEC_WORKFLOW_STRICT_LANES") == "1":
+                return problem
+            WARNINGS.append(f"spec-workflow (advisory): {problem} Mention this edit in your handoff.")
+            return None
+        # Lanes are repo-relative; only this checkout's lanes compete for the file.
+        relative = workspace.logical(config, relative)
+        active = [item for item in active if item.get("branch") == checkout[1]]
     if own is None:
         WARNINGS.append(f"spec-workflow: lane ownership not enforced for {relative}: this agent has no known assignment "
                         "(run `spec-tracker claim <assignment-id>` from the brief first)")
