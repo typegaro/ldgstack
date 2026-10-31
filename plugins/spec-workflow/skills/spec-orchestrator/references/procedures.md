@@ -61,7 +61,8 @@ With the user's decision: write the successors (`spec new --supersedes <old>` fo
 - Active record exists: resume the role its status requires.
 - Record archived but spec not: retry `spec archive`.
 - Archived spec hash changed (`validate` fails): stop and report source-of-truth corruption.
-- Reimplementing accepted work: `spec restore` (only for code defects against an unchanged spec; contract changes need a new spec), add any missing requirements, `handoff --to implementer`, then review and test again before archiving.
+- Reimplementing accepted work: `spec restore` (only for code defects against an unchanged spec; contract changes need a new spec), then `tracker restore` (`--touches <REQ...>` keeps the untouched requirements' evidence), add any missing requirements, `handoff --to implementer` (or file the defect as a bug for the fixer), then review and test again before archiving.
+- A reviewer check left `not_run` and re-run by the reviewer later in the same generation doesn't need a new test round; a new review after the test does.
 
 ## Completion
 
@@ -71,7 +72,7 @@ When the queue is empty:
 2. Run `tracker toolkit verify`, and the inspection CLI's `overview` and `check all` across the whole application; every violation is a defect. If the CLI has no `check all`, report that gap to the user.
 3. Run cross-spec regressions: ownership, authorization, lifecycle, concurrency, execution, streaming, cancellation, recovery, and convention consistency across all endpoints.
 4. Delegate one whole-codebase `spec-workflow:spec-reviewer` pass against all specs.
-5. Record each finding with the spec it escaped from and the finder class that should have caught it (reviewer, tester, or none), so the retro can attribute escapes. For each defect, restore the owning spec and route the defect through fixer and independent retest, then re-archive.
+5. Record each finding with the spec it escaped from and the finder class that should have caught it (reviewer, tester, or none), so the retro can attribute escapes. For each defect, restore the owning spec (`tracker restore <feature> --touches <REQ...>` for a narrow defect: only those requirements reset), file it with `tracker bug add ... --parent-confirmed --found-by final-review`, and route it through fixer, review, and independent retest, then re-archive.
 6. Report archived specs, checks, environment limitations, and confirmation that spec contents are unchanged (`validate`).
 7. Offer a `workflow-retro --conformance` run over this session.
 

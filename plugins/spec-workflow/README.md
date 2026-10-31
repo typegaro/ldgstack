@@ -251,3 +251,12 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 ## Changes in 0.10.6
 
 - Worktree mode: `env` in workspace.json overrides keys in copied dotenv files (`{"env": {"be": {".env": {"DATABASE_URL": "..."}}}}`), so spec checkouts can't reach the dev database. In m33 a checkout that inherited `.env` migrated the dev database to an unmerged branch's migration; the documented example now overrides it.
+
+## Changes in 0.10.7
+
+From the m33 0082/0087/0088 run.
+
+- Worktree path rewrite: `direnv exec <repo>` resolves to the checkout too, a plain `cd ..` right after a rewritten `cd <repo>` climbs back to the project root (`cd ../..`), and paths that already name a checkout (`fe/main`) are left alone, so the rewrite is idempotent. `spec preflight` now uses the same rewrite.
+- Acceptance ordering: a reviewer re-running its own `not_run` check in the same generation no longer forces another tester round; a new passing review after the test still does.
+- `tracker restore --touches REQ...`: a narrow restore resets only those requirements; the rest keep their implementation and test evidence. Fresh review and test checks are still required.
+- `bug add --parent-confirmed --found-by <finder>`: the parent files findings, e.g. from the final whole-codebase review.

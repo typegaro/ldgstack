@@ -437,3 +437,7 @@ In 0082 batch 4's executor ran `handoff --to parent` while batch 6's executor (`
 ### 83. Copied `.env` pointed spec checkouts at the dev database (0.10.0–0.10.5)
 The suggested `copy: {"be": [".env"]}` gave every checkout the dev `DATABASE_URL`; an agent in a spec checkout migrated the dev database to the branch's migration 51 before merge.
 **Resolved (0.10.6):** `env` overrides in workspace.json and a procedures rule; m33 also rewrites the URL in a `setup` step.
+
+### 84. m33 0082/0087/0088 run friction (0.10.6)
+Multi-directory smokes broke under the worktree rewrite (`cd ..`, `direnv exec fe`); a late reviewer re-record of a `not_run` check forced a no-op tester round; `restore` reset all 16 requirements for a 2-defect fix; the parent couldn't file final-review bugs.
+**Resolved (0.10.7):** idempotent rewrite with `direnv exec` and `cd ..` handling; ordering exemption for same-generation re-runs of `not_run` reviewer checks; `restore --touches`; `bug add --parent-confirmed --found-by`.

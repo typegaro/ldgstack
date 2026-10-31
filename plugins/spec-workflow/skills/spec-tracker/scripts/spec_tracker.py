@@ -82,6 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     bug_add.add_argument("--severity", choices=SEVERITIES, required=True)
     for name in BUG_FIELDS:
         bug_add.add_argument(f"--{name.replace('_', '-')}", required=True)
+    bug_add.add_argument("--parent-confirmed", action="store_true", help="the parent files a finding (e.g. the final whole-codebase review)")
+    bug_add.add_argument("--found-by", help="with --parent-confirmed: who found it (e.g. final-review); recorded for the retro")
     command(bugs, "assign", item=True).add_argument("--fixer", required=True)
     fixed = command(bugs, "fixed", item=True)
     fixed.add_argument("--fix", required=True)
@@ -212,7 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
     command(commands, "spec-check")
     command(commands, "spec-sync", confirmed=True).add_argument("--reason", required=True)
     command(commands, "archive", confirmed=True)
-    command(commands, "restore", confirmed=True)
+    reopen = command(commands, "restore", confirmed=True)
+    reopen.add_argument("--touches", nargs="+", metavar="REQ",
+                        help="a narrow defect: reset only these requirements; the rest keep their implementation and test evidence")
     retire = command(commands, "abandon", confirmed=True,
                      help="retire a record whose spec won't be implemented as written (split or replaced); kept in implementation/abandoned/")
     retire.add_argument("--reason", required=True)
@@ -595,7 +599,7 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
     def add(record: Record) -> None:
         record["bugs"].append({
             "id": next_id(record["bugs"], f"BUG-{record['feature']}-"), "title": args.title,
-            "status": "open", "severity": args.severity, "found_by": record["current_role"],
+            "status": "open", "severity": args.severity, "found_by": args.found_by or record["current_role"],
             **{name: getattr(args, name) for name in BUG_FIELDS},
             "assigned_fixer": "", "fix": "", "regression": "", "retest": "",
         })
@@ -625,6 +629,12 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
             item.update(status="closed_not_a_bug", retest=args.reason, user_decision=args.user_decision)
 
     if args.action == "add":
+        if args.parent_confirmed:
+            if not args.found_by:
+                raise TrackerError("a parent-filed bug names its finder: --found-by final-review (or the review or agent that found it)")
+            return edit(root, args.feature, set(ROLES), add)
+        if args.found_by:
+            raise TrackerError("--found-by goes with --parent-confirmed; a reviewer or tester is recorded as the finder automatically")
         return edit(root, args.feature, {"reviewer", "tester"}, add)
     return edit(root, args.feature, {BUG_TRANSITIONS[args.action][0]}, transition)
 
@@ -1086,11 +1096,30 @@ def restore(root: Path, args: argparse.Namespace) -> Record:
     if record_path(root, args.feature).exists():
         raise TrackerError("active implementation record already exists")
     record = load(root, args.feature, archived=True)
-    bump_generation(record, "accepted implementation restored", invalidate_implementation=True)
+    if args.touches:
+        # A narrow restore: a new generation (fresh review and test checks are required), but only the touched
+        # requirements lose their marks; the others keep their evidence.
+        known = {item["id"] for item in record["requirements"]}
+        unknown = [identifier for identifier in args.touches if identifier not in known]
+        if unknown:
+            raise TrackerError(f"unknown requirements: {', '.join(unknown)} (see `tracker requirement list {record['feature']}` after restoring)")
+        previous = generation(record)
+        for item in record["requirements"]:
+            if item["id"] in args.touches:
+                invalidate_item(item, "accepted implementation restored for a narrow fix", True, previous + 1)
+            elif item.get("implemented"):
+                item["implemented_generation"] = previous + 1
+        record["generation"] = previous + 1
+        record.setdefault("generation_history", []).append(
+            {"from": previous, "to": previous + 1, "reason": f"restored for {', '.join(args.touches)}", "at": now()})
+        remaining = f"Fix and retest {', '.join(args.touches)}; review and retest the change"
+    else:
+        bump_generation(record, "accepted implementation restored", invalidate_implementation=True)
+        remaining = "Reimplementation and independent retest"
     record.update(status="implementing", current_role="parent")
     record["handoff"] = {
         "from": "parent", "completed": "Previous acceptance reopened",
-        "remaining": "Reimplementation and independent retest", "checks_not_run": "", "next_role": "implementer",
+        "remaining": remaining, "checks_not_run": "", "next_role": "implementer",
     }
     touch(record)
     save(root, record)

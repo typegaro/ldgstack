@@ -284,6 +284,8 @@ class PlanningCompatibilityTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         shutil.copytree(COMPAT / "specs", self.root / "specs")
         shutil.copytree(COMPAT / "implementation", self.root / "implementation")
+        # Claims bind live agents of the real project (e.g. a tester holding the test slot); the copy has none.
+        shutil.rmtree(self.root / "implementation" / ".assignments", ignore_errors=True)
         (self.root / "AGENTS.md").write_text("# Copy\n", encoding="utf-8")
 
     def tearDown(self) -> None:

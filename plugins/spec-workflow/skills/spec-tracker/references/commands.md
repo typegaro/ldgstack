@@ -28,6 +28,8 @@ tracker toolkit remove <name> --reason "..."
 tracker risk 0000-project-bootstrap high|normal --parent-confirmed      # high: fresh reviewer each round; normal: one review, then the fix diff
 tracker bug follow-up 0000-project-bootstrap BUG-... --reason "..." --parent-confirmed [--user-decision "..."]   # low (medium with a decision) leaves the gate
 tracker follow-ups                                                     # follow-up bugs in active and archived records
+tracker bug add 0000-project-bootstrap ... --parent-confirmed --found-by final-review   # the parent files a finding (e.g. the final review)
+tracker restore 0000-project-bootstrap --touches REQ-003 REQ-007 --parent-confirmed      # narrow defect: only these requirements reset
 tracker assign 0000-project-bootstrap --role implementer --from-plan --batch 2 --parallel --parent-confirmed   # one more executor, disjoint lane
 tracker assign 0000-project-bootstrap --release --assignment ASSIGN-... --parent-confirmed                  # end one parallel lane (parent)
 tracker join 0000-project-bootstrap --assignment ASSIGN-... --completed "..."                            # an executor ends its batch lane; siblings keep theirs

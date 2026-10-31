@@ -166,6 +166,13 @@ def latest_checks(record: dict[str, Any]) -> list[dict[str, Any]]:
     return list({item["name"]: item for item in record["checks"] if in_current_generation(record, item)}.values())
 
 
+def reran_not_run(record: dict[str, Any], check: dict[str, Any]) -> bool:
+    """Whether `check` supersedes a not_run result of the same name and role in the current generation."""
+    earlier = [item for item in record["checks"] if item is not check and item["name"] == check["name"] and item["at"] <= check["at"]
+               and item.get("role") == check.get("role") and in_current_generation(record, item)]
+    return bool(earlier) and earlier[-1]["result"] == "not_run"
+
+
 def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tuple[str, ...] = ("tester",)) -> list[str]:
     errors: list[str] = []
     feature = record["feature"]
@@ -205,7 +212,8 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
         for role, label in (("reviewer", "code review by the reviewer"), ("tester", "check executed by the independent tester")):
             if not any(item["result"] == "passed" and item.get("role") == role for item in checks):
                 errors.append(f"no passing {label}")
-        reviews = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "reviewer"]
+        # A reviewer re-running its own not_run check in the same generation changed no code, so it needs no new test round.
+        reviews = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "reviewer" and not reran_not_run(record, item)]
         tests = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "tester"]
         if reviews and tests and max(tests) <= max(reviews):
             errors.append("independent tester check must be recorded after the latest passing reviewer check")

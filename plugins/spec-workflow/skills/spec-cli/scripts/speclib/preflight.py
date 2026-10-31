@@ -2,28 +2,26 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 from .errors import SpecError
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "spec-tracker" / "scripts"))
+from tracker import workspace  # noqa: E402
+
 TIMEOUT_SECONDS = 300
-WORKSPACE = "implementation/workspace.json"
 
 
 def on_main(root: Path, command: str) -> str:
-    """Worktree mode (spec-tracker's workspace.json): `cd <repo>` runs in the accepted `<repo>/<main>` checkout."""
+    """Worktree mode (spec-tracker's workspace.json): repo paths resolve to the accepted `<repo>/<main>` checkout."""
     try:
-        config = json.loads((root / WORKSPACE).read_text(encoding="utf-8"))
-        repos, main = list(config["repos"]), str(config.get("main", "main"))
-    except (OSError, ValueError, KeyError, TypeError):
+        config = workspace.load(root)
+    except workspace.WorkspaceError:
         return command
-    for repo in repos:
-        command = re.sub(rf"(\bcd\s+){re.escape(repo)}(?=[/\s;&|)]|$)", rf"\g<1>{repo}/{main}", command)
-        command = re.sub(rf"(?<![\w./-])\.\./{re.escape(repo)}(?=[/\s;&|)'\"]|$)", f"../../{repo}/{main}", command)
-    return command
+    return workspace.rewrite(config, command, config["main"], root) if config else command
 
 
 def run(root: Path) -> dict[str, Any]:

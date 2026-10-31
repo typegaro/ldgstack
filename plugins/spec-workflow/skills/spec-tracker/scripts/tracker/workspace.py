@@ -70,11 +70,28 @@ def logical(config: dict[str, Any], relative: str) -> str:
 def rewrite(config: dict[str, Any], command: str, branch: str, root: Path | None = None) -> str:
     """Point `cd <repo>` (and `cd <repo>/sub`) at the `<repo>/<branch>` checkout, and a sibling `../<repo>` (used from inside a
     checkout) at `../../<repo>/<branch>`, or `../../<repo>/<main>` when that repo has no checkout for the branch."""
+    end = r"(?=[/\s;&|)'\"]|$)"
     for repo in config["repos"]:
-        command = re.sub(rf"(\bcd\s+){re.escape(repo)}(?=[/\s;&|)]|$)", rf"\g<1>{repo}/{branch}", command)
+        # Paths that already name a checkout (`fe/main`, `fe/<branch>`) are left alone, so rewriting is idempotent.
+        names = {config["main"], branch} | ({path.name for path in (root / repo).iterdir() if path.is_dir()}
+                                             if root is not None and (root / repo).is_dir() else set())
+        named = rf"(?!/(?:{'|'.join(re.escape(name) for name in sorted(names))}){end})"
+        command = re.sub(rf"(\b(?:cd|direnv\s+exec)\s+){re.escape(repo)}{named}{end}", rf"\g<1>{repo}/{branch}", command)
         sibling = branch if root is None or (root / repo / branch).is_dir() else config["main"]
-        command = re.sub(rf"(?<![\w./-])\.\./{re.escape(repo)}(?=[/\s;&|)'\"]|$)", f"../../{repo}/{sibling}", command)
-    return command
+        command = re.sub(rf"(?<![\w./-])\.\./{re.escape(repo)}{named}{end}", f"../../{repo}/{sibling}", command)
+    # `cd <repo>` now enters one level deeper, so a plain `cd ..` straight after it must climb two levels back to the root.
+    checkouts = "|".join(re.escape(f"{repo}/{branch}") for repo in config["repos"])
+    state = {"inside": False}
+
+    def climb(match: re.Match[str]) -> str:
+        target = match.group(2)
+        if target == ".." and state["inside"]:
+            state["inside"] = False
+            return f"{match.group(1)}../.."
+        state["inside"] = bool(re.fullmatch(checkouts, target))
+        return match.group(0)
+
+    return re.sub(r"(\bcd\s+)([^\s;&|)]+)", climb, command)
 
 
 def git(path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
