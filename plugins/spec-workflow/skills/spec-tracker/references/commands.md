@@ -41,7 +41,21 @@ tracker toolkit verify [name ...] [--feature 0000-project-bootstrap]   # worktre
 tracker abandon 0000-project-bootstrap --reason "..." --user-decision "..." [--superseded-by 87] --parent-confirmed   # split/replaced spec; record kept in implementation/abandoned/
 ```
 
-Worktree mode (`implementation/workspace.json`) and the test slot are described in the orchestrator procedures. A tester brief refuses while `test_slots` other specs are being tested (`--parent-confirmed --user-decision` overrides).
+Worktree mode (`implementation/workspace.json`), local PRs, CI, and the queues are described in the orchestrator procedures.
+
+```bash
+tracker pr open 0000-project-bootstrap --completed "..." --remaining "..."   # implementer/fixer: commits, merge-tree vs main, PR checks, ci.fast, then -> reviewer
+tracker pr status [0000-project-bootstrap]                # re-checks open PRs against main; --json: prs[] with repos, fast_ci, review_rounds, queue
+tracker pr return 0000-project-bootstrap --parent-confirmed   # a PR that now conflicts goes to the fixer with an assigned bug
+tracker ci run 0000-project-bootstrap [--tier full] [--parent-confirmed]   # records ci-<tier>; log under implementation/ci/<feature>/
+tracker queue status                                      # --json: queues.{review,test,merge}.{slots,holders,waiting}, merge.last, agents
+tracker queue wait test [--feature 0000-project-bootstrap] [--timeout 2h]   # polls every 2 s; exits 0 with the item once it has a slot
+tracker queue add merge 0000-project-bootstrap --parent-confirmed   # after gate acceptance; add test F --class browser --priority 1 also works
+tracker queue run merge --parent-confirmed                # one item: merge main in, ci.fast + pre_merge, ff main, archive, re-check PRs, post_merge
+tracker assign 0000-project-bootstrap --role tester --read-only --slot-class browser --parent-confirmed
+```
+
+A reviewer or tester brief without a slot refuses and names `queue wait` (`--parent-confirmed --user-decision` overrides).
 
 The toolkit manifest (`implementation/toolkit.json`) is project-wide and CLI-only; see `test-toolkit` for capabilities and tool rules. Gap IDs are `GAP-<feature>-NNN`; `resolve` and `defer` take the qualified ID alone, or `<feature> GAP-NNN`.
 

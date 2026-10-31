@@ -50,6 +50,9 @@ def worktree(record: dict[str, Any], config: dict[str, Any] | None, role: str) -
     if role in ("reviewer", "fixer"):
         text += " Changes under review: " + "; ".join(f"`git -C {repo}/{branch} diff {main}...HEAD`" for repo in tree["repos"])
         text += f" (each writer handoff commits a checkpoint; `git log {main}..HEAD` lists the rounds)."
+    flag = record.get("rereview_required")
+    if role == "reviewer" and flag:
+        text += f" Focus first on the merge with {main} an agent resolved ({flag['reason']}): `git log --merges {main}..HEAD`."
     return text
 
 
@@ -128,17 +131,19 @@ def decisions(record: dict[str, Any]) -> str:
 
 
 def next_command(tracker: str, feature: str, role: str, final: bool, batch: str | None, side: bool = False,
-                 assignment: str | None = None, siblings: bool = False) -> str:
+                 assignment: str | None = None, siblings: bool = False, pr: bool = False) -> str:
     if side:
         return f'{tracker} join {feature} --completed "..."   (you work alongside the fixer; never `handoff`)'
     handoff = f'{tracker} handoff {feature} --to {{target}} --completed "..." --remaining "..."'
+    review = (f'{tracker} pr open {feature} --completed "..." --remaining "..."   (checks conflicts with main and runs the fast CI '
+              "tier, then hands off to the reviewer; on a refusal fix it and run it again)") if pr else handoff.format(target="reviewer")
     if role == "implementer":
         if siblings:
             return (f'{tracker} join {feature} --assignment {assignment} --completed "..."   '
                     "(ends only your batch lane; never `handoff`: other executors are working in parallel)")
         if batch and not final:
             return "none: end without a handoff; the parent resumes you with the next batch"
-        return handoff.format(target="reviewer") + "   (blocked: --to parent)"
+        return review + "   (blocked: handoff --to parent)"
     if role == "reviewer":
         return handoff.format(target="tester") + "   (bugs, blockers, or tool gaps: --to parent)"
     if role == "tester":
@@ -146,7 +151,7 @@ def next_command(tracker: str, feature: str, role: str, final: bool, batch: str 
     if role == "planner":
         return (f"{tracker} plan add {feature} --from - <<'PLAN' ... PLAN   then   " + handoff.format(target="parent"))
     if role == "fixer":
-        return handoff.format(target="reviewer") + "   (blocked: --to parent)"
+        return review + "   (blocked: handoff --to parent)"
     return handoff.format(target="tester") + "   (blocked: --to parent)"
 
 
@@ -268,7 +273,8 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         "ownership": ownership, "toolchain": toolchain(root, config, tree["branch"] if tree else None), "tracker": tracker,
         "worktree": worktree(record, config, role), "risk": record.get("risk", "normal"),
         "toolkit": "\n".join(f"  - {line}{' (stale)' if line.split(' ', 1)[0] in kit['stale'] else ''}" for line in kit["lines"]) or "  none registered",
-        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side, own["id"], bool(siblings) and role == "implementer"),
+        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side, own["id"], bool(siblings) and role == "implementer",
+                                                                   bool(tree and config)),
     }
     try:
         return template().format(**values).rstrip() + "\n"

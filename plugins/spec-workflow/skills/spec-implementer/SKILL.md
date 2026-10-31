@@ -66,7 +66,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 3. Record a check you could not run as `not_run` with the reason, and name it in your report. It doesn't block review or test handoffs, but it blocks acceptance until it runs or the user waives it. Use `not_applicable` (with the reason) only for a check that does not apply.
 4. Run the inspection CLI's `check all` (if it has none, record it as `not_applicable`). A violation is a bug to fix or report, never something to ignore.
 5. Run `spec-check`. Inspect the diff for unrelated edits, leaked secrets, generated-file drift, and boundary violations.
-6. `handoff --to reviewer` (this passes `ready-test` automatically), or `--to parent` when blocked. Hand off `--to tester` only when the parent's prompt says so: the CLI allows it only after a passed review, when you implemented nothing but requirements added since that review.
+6. Worktree mode: `pr open <feature> --completed "..." --remaining "..."` (commits, conflict check against main, PR checks, fast CI, then the reviewer; on a refusal fix what it names and run it again). Otherwise `handoff --to reviewer` (this passes `ready-test` automatically). `--to parent` when blocked. Hand off `--to tester` only when the parent's prompt says so: the CLI allows it only after a passed review, when you implemented nothing but requirements added since that review.
 
 ## Planner role
 
@@ -80,8 +80,8 @@ When assigned as fixer:
 - Reproduce each bug from its recorded steps before changing code. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
 - Add a regression test that fails without the fix. Record `bug fixed` with the fix and that test.
 - Never verify your own fix.
-- Run the relevant checks, then `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest.
-- A merge-conflict bug: in your worktree, `git rebase <main>`, resolve, rerun the focused tests, and record the resolution as the fix.
+- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest.
+- A merge-conflict or merge-queue CI bug: in your worktree, `git merge <main>`, resolve, rerun the focused tests, record the resolution as the fix, then `pr open`. Name the resolved files in your report: a fresh focused review checks them.
 
 ## Completion report
 

@@ -239,15 +239,15 @@ class TestSlotTest(WorktreeCase):
     def test_one_tester_at_a_time(self) -> None:
         self.to_tester(FEATURE)
         self.to_tester(OTHER)
-        self.tracker("brief", FEATURE, "--role", "tester")
-        self.tracker("brief", OTHER, "--role", "tester")  # nobody has claimed a tester lane yet
+        self.tracker("brief", FEATURE, "--role", "tester")  # first in the test queue: it holds the slot
+        error = self.tracker("brief", OTHER, "--role", "tester", succeeds=False)["error"]["message"]
+        self.assertIn(f"test slot busy: {FEATURE}", error)
+        self.assertIn(f"queue wait test --feature {OTHER}", error)
         record = json.loads((self.root / "implementation" / "active" / f"{FEATURE}.json").read_text(encoding="utf-8"))
         tester = next(item["id"] for item in record["assignments"] if item["status"] == "active" and item["role"] == "tester")
         markers = self.root / "implementation" / ".assignments"
         markers.mkdir(exist_ok=True)
         (markers / "agent-a").write_text(tester + "\n", encoding="utf-8")
-        error = self.tracker("brief", OTHER, "--role", "tester", succeeds=False)["error"]["message"]
-        self.assertIn(f"test slot busy: {FEATURE}", error)
         self.assertEqual(self.tracker("worktree", "status")["result"]["testing"], [FEATURE])
         self.tracker("brief", OTHER, "--role", "tester", "--parent-confirmed", "--user-decision", "run both now")
         self.feature = FEATURE

@@ -441,3 +441,7 @@ The suggested `copy: {"be": [".env"]}` gave every checkout the dev `DATABASE_URL
 ### 84. m33 0082/0087/0088 run friction (0.10.6)
 Multi-directory smokes broke under the worktree rewrite (`cd ..`, `direnv exec fe`); a late reviewer re-record of a `not_run` check forced a no-op tester round; `restore` reset all 16 requirements for a 2-defect fix; the parent couldn't file final-review bugs.
 **Resolved (0.10.7):** idempotent rewrite with `direnv exec` and `cd ..` handling; ordering exemption for same-generation re-runs of `not_run` reviewer checks; `restore --touches`; `bug add --parent-confirmed --found-by`.
+
+### 85. Hand-scheduled test slot, late merge conflicts, repeated full suites (0.10.7)
+The parent hand-scheduled the single test slot; 0082 and 0087 both took migration 52 and the 11 conflicts surfaced only after 0087's test; agents ran full suites repeatedly.
+**Resolved (0.11.0):** local PRs (`pr open`: commits, merge-tree against main, PR checks, fast CI), re-checks of open PRs whenever main moves with a built-in duplicate-number hook, review/test/merge queues with slot classes, leases and `queue wait`, and the merge queue (`queue run merge`).

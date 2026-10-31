@@ -173,7 +173,8 @@ def reran_not_run(record: dict[str, Any], check: dict[str, Any]) -> bool:
     return bool(earlier) and earlier[-1]["result"] == "not_run"
 
 
-def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tuple[str, ...] = ("tester",)) -> list[str]:
+def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tuple[str, ...] = ("tester",),
+                exempt_checks: set[str] | frozenset[str] = frozenset()) -> list[str]:
     errors: list[str] = []
     feature = record["feature"]
     if not spec_matches(root, record):
@@ -193,7 +194,7 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
     if not any(item["result"] == "passed" for item in checks):
         errors.append("no verification check has passed")
     # A tester's failed check is re-run by the tester on retest; it blocks acceptance, not the handoff back.
-    failed = [item["name"] for item in checks if item["result"] == "failed"
+    failed = [item["name"] for item in checks if item["result"] == "failed" and item["name"] not in exempt_checks
               and (gate == "acceptance" or item.get("role") not in exempt_roles)]
     if failed:
         detail = blocking_checks(record, {"failed"}) if gate == "acceptance" else ", ".join(failed)
@@ -222,6 +223,11 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
         gaps = [item["id"] for item in open_tool_gaps(record)]
         if gaps:
             errors.append(f"open tool gaps: {', '.join(gaps)} (the toolsmith resolves them, or the parent defers them with a user decision)")
+        flag = record.get("rereview_required")
+        if flag and not any(item["result"] == "passed" and item.get("role") == "reviewer" and item["at"] > flag["at"] for item in checks):
+            errors.append(f"an agent resolved a merge with main ({flag['reason']}): a fresh focused review must pass after it")
+        from . import ci  # noqa: PLC0415 (ci imports this module)
+        errors += ci.gate_errors(root, record)
     return errors
 
 

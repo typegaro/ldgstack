@@ -38,18 +38,30 @@ project/  specs/  implementation/workspace.json
 ```
 
 ```json
-{"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}", "test_slots": 1,
+{"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}",
  "copy": {"be": [".env"]}, "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}},
- "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]}}
+ "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]},
+ "slots": {"review": 2, "test": {"stack": 1, "browser": 2}}, "lease": "2h",
+ "ci": {"fast": {"be": ["direnv exec . go build ./...", "direnv exec . go vet ./..."], "fe": ["direnv exec . npm run typecheck"]}},
+ "hooks": {"duplicate_numbers": [{"glob": "be/db/migrations/*.sql", "pattern": "^(\\d+)"}],
+           "pr_check": [], "pre_merge": [], "post_merge": ["make -C docker deploy"]}}
 ```
 
 - **Adopt** (with the user, between specs, no agent running): commit or stash each repo, then `mv be be.tmp && mkdir be && mv be.tmp be/main` per repo, update paths that pointed at `be/` (scripts, compose files, project instructions), write `workspace.json`, run `spec preflight` (it runs `cd <repo>` commands in `<repo>/main`).
 - **Copied env files never point at shared state.** A spec checkout that inherits the dev `DATABASE_URL` (or any shared database, queue, bucket, or production credential) lets an agent migrate or write the dev environment with unaccepted code. Override every such key with `env` (it rewrites the copied dotenv file), so tests reach only isolated stacks (`env.isolate`).
 - **Per spec:** `tracker worktree create <feature> --parent-confirmed` before the first writer (`--repos` defaults to the plan's ownership; the base is an unmerged dependency's branch, else main). `copy` brings untracked files (e.g. `.env`) and `setup` runs per new checkout. Briefs point toolchain commands and the `Worktree:` line at the checkouts. Lane globs stay repo-relative.
-- **Rounds:** each writer handoff commits a checkpoint on the branch; reviewers diff `main...HEAD`. `tracker worktree status` shows changes, commits ahead/behind main, merged state, and who holds the test slot.
-- **Accept:** gate acceptance, `worktree merge` (checks every repo with `git merge-tree` and merges all or nothing), `spec preflight`, then `archive` (needs the merge; removes checkouts and branches). Dependent branches rebase onto main afterwards.
-- **Conflicts:** add a bug ("merge conflict in <files>"), hand it to the fixer, who rebases the branch onto main in its checkout and reruns the focused tests; then review the fix and merge again. Migration numbers collide often: renumber in the branch, or use timestamped migrations.
+- **Rounds:** each writer handoff commits a checkpoint on the branch; reviewers diff `main...HEAD`. `tracker worktree status` shows changes, commits ahead/behind main, and merged state.
+- **Accept:** the merge queue (below); without it, gate acceptance, `worktree merge` (checks every repo with `git merge-tree` and merges all or nothing), `spec preflight`, then `archive` (needs the merge; removes checkouts and branches).
+- **Conflicts:** the fixer merges main into the branch in its checkout (`git merge main`), resolves, reruns the focused tests, and opens the PR again; an agent's resolution needs a fresh focused review. Migration numbers collide often: `hooks.duplicate_numbers` flags a branch that reuses a number main or another open branch has; renumber in the branch.
 - **Abandon:** `worktree remove <feature> --force --user-decision "..." --parent-confirmed`.
+
+## Local PRs, CI, and queues (worktree mode)
+
+- **CI tiers:** `ci.<tier>.<repo>` commands run in `<repo>/<branch>` (sibling `../<repo>` paths are rewritten as for the toolkit), stop at the first failure, and are recorded as check `ci-<tier>` with commands, exit codes, seconds, branch and main SHAs, and a log under `implementation/ci/<feature>/`. Only CI runs record them. With a `ci.fast` tier, the acceptance gate needs a passing `ci-fast` on the branch's current SHAs (`tracker ci run <feature> [--tier full] [--parent-confirmed]` reruns it, e.g. after a toolsmith commit).
+- **Open PR:** `tracker pr open <feature> --completed "..." --remaining "..."` (implementer or fixer) commits the checkout, needs commits on the branch, refuses on a `git merge-tree` conflict with main or a blocking PR check, runs the fast tier, then hands off to the reviewer. With a `ci` section a writer's direct `handoff --to reviewer` is refused. A refusal keeps the record with the writer. CI runs outside the project lock, so other agents' tracker calls don't wait for it.
+- **PR checks:** whenever main moves (`queue run merge`) and on `pr status`, every open PR is re-checked: merge-tree against main, `hooks.duplicate_numbers` (a new file whose number main, or another open branch, already uses under another name; branch-vs-branch is a warning: the one merged second renumbers), and `hooks.pr_check` commands (run from the root with repo paths pointed at the branch; `SPEC_FEATURE`, `SPEC_BRANCH` set). A blocked PR's queue item stays waiting; `pr return <feature> --parent-confirmed` sends it to the fixer with an assigned bug.
+- **Queues** (`implementation/queues.json`, CLI-managed): review, test, and merge. Items are waiting, granted (a slot is reserved; brief or resume the agent), holding (an agent claimed the role's assignment after the item was queued), or running (a merge). Handoff out of the role drops the item. A lease (`lease`, default 2h) moves a dead holder to the back of its band. `queue add <queue> <feature> [--class C] [--priority N] --parent-confirmed` sets a class or priority; `queue add merge` needs the acceptance gate.
+- **Merge queue:** `queue run merge --parent-confirmed` takes the granted item: merge-tree conflicts return it to the fixer (nothing touched, fresh focused review required); else it merges main into the branch, runs the fast tier and `hooks.pre_merge`, and on failure returns it to the fixer (the merge commit stays on the branch). Otherwise it fast-forwards `<repo>/main`, archives the record and the spec, removes the checkouts, re-checks the open PRs (`conflicting_prs`), runs `hooks.post_merge` from the root on main, and reports `queue_next`.
 
 ## Splitting or replacing an unaccepted spec
 

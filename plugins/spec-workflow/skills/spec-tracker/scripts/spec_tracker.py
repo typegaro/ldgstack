@@ -5,12 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
+import threading
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Callable
 
 from tracker import brief as briefs
-from tracker import deps, toolkit
+from tracker import ci, deps, queues, toolkit
 from tracker import paths as lanes
 from tracker import plan as plans
 from tracker import requirements as spec_requirements
@@ -24,6 +28,7 @@ from tracker.model import (
 from tracker.store import (
     TrackerError, digest, feature_name, find_root, load, load_all, project_lock, record_path, remove, save, spec_path, write_atomic,
 )
+from tracker.workspace import QUEUES
 from tracker.render import markdown
 
 Record = dict[str, Any]
@@ -195,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     joined.add_argument("--completed", required=True)
     joined.add_argument("--assignment", metavar="ID", help="an executor ending its batch: release only this lane (parallel siblings keep theirs)")
     assign.add_argument("--user-decision", help="early record: run a batch before its required specs are accepted (the user's words, with --parent-confirmed)")
+    assign.add_argument("--slot-class", metavar="CLASS", help="reviewer or tester: the resource class its queue slot needs (workspace.json slots)")
     commands.add_parser("claim", help="first command of a brief: binds this agent to its assignment (the hook records it)").add_argument("assignment")
     brief = command(commands, "brief", help="print the delegation prompt for the record's current role")
     brief.add_argument("--role", required=True, choices=[role for role in ROLES if role != "parent"])
@@ -222,6 +228,43 @@ def build_parser() -> argparse.ArgumentParser:
     retire.add_argument("--reason", required=True)
     retire.add_argument("--user-decision", required=True)
     retire.add_argument("--superseded-by", type=int, action="append", default=[], metavar="ID", help="the spec(s) that take over (repeatable)")
+
+    prs = group(commands, "pr")
+    opened = command(prs, "open", help="writer's handoff to review in worktree mode: commits on the branch, no conflict with main, "
+                                       "project PR checks, fast CI; then hands off to the reviewer")
+    opened.add_argument("--completed", required=True)
+    opened.add_argument("--remaining", required=True)
+    opened.add_argument("--checks-not-run", default="None")
+    shown = prs.add_parser("status", help="open PRs re-checked against current main (conflicts, PR checks), fast CI, queue place")
+    shown.add_argument("feature", nargs="?")
+    shown.add_argument("--json", dest="json_after", action="store_true")
+    returned = command(prs, "return", confirmed=True, help="send a PR that conflicts with main to the fixer with a conflict bug (parent)")
+    returned.add_argument("--reason", help="default: the conflicts and findings of the last re-check")
+
+    run_ci = command(group(commands, "ci"), "run", confirmed=True, help="run a workspace.json ci tier on the spec's branch; records check ci-<tier>")
+    run_ci.add_argument("--tier", default="fast")
+
+    queue = group(commands, "queue")
+    queue.add_parser("status", help="review, test and merge queues: slots, holders, waiting order; running agents").add_argument(
+        "--json", dest="json_after", action="store_true")
+    wait = queue.add_parser("wait", help="block until the caller's item holds a slot, then print it (run it as a background command)")
+    wait.add_argument("queue", choices=QUEUES)
+    wait.add_argument("--feature", help="default: the next granted item nobody has claimed yet")
+    wait.add_argument("--timeout", metavar="D", help="give up after D (seconds, or 30m, 2h); default: wait forever")
+    added = queue.add_parser("add", help="add a record to a queue (merge: after gate acceptance), or set its class or priority")
+    added.add_argument("queue", choices=QUEUES)
+    added.add_argument("feature")
+    added.add_argument("--class", dest="slot_class", help="resource class from workspace.json slots")
+    added.add_argument("--priority", type=int, default=0, help="higher goes first (a retest is queued at 1)")
+    added.add_argument("--parent-confirmed", action="store_true")
+    ran = queue.add_parser("run", help="merge the next queued spec: merge main in, fast CI, fast-forward main, archive, re-check open PRs")
+    ran.add_argument("queue", choices=("merge",))
+    ran.add_argument("--parent-confirmed", action="store_true")
+
+    ui = commands.add_parser("ui", help="serve the read-only dashboard on localhost")
+    ui.add_argument("--port", type=int, default=8733)
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--no-open", action="store_true", help="don't open a browser")
     return parser
 
 
@@ -560,6 +603,8 @@ def check(root: Path, args: argparse.Namespace) -> Record:
     superseded: Record = {}
 
     def add(record: Record) -> None:
+        if args.name in ci.names(workspace_config(root, required=False)):
+            raise TrackerError(f"{args.name} is recorded only by a CI run: `tracker pr open {record['feature']} ...` or `tracker ci run {record['feature']}`")
         latest = {item["name"]: item for item in latest_checks(record)}.get(args.name)
         owner = next((item.get("role") for item in reversed(record["checks"])
                       if item["name"] == args.name and item.get("role") in {"reviewer", "tester"}), None)
@@ -786,6 +831,7 @@ def ask(record: Record, args: argparse.Namespace) -> None:
 def handoff(root: Path, args: argparse.Namespace) -> Record:
     if not args.question and not (args.completed and args.remaining):
         raise TrackerError("handoff needs --completed and --remaining (or --to parent --question \"...\")")
+    config = workspace_config(root, required=False)
 
     def change(record: Record) -> None:
         source, target = record["current_role"], args.to
@@ -801,6 +847,10 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                                f"`tracker join {record['feature']} --completed \"...\"` first (joined before review and retest)")
         if source == "planner" and not plans.latest(record):
             raise TrackerError(f"no plan stored; run `tracker plan add {record['feature']} --from - <<'PLAN' ... PLAN` first")
+        if (target == "reviewer" and source in {"implementer", "fixer"} and record.get("worktree") and config and config["ci"]
+                and not getattr(args, "via_pr", False)):
+            raise TrackerError(f"worktree mode with ci: a writer opens a PR instead (conflict check and fast CI, then the reviewer): "
+                               f"`tracker pr open {record['feature']} --completed \"...\" --remaining \"...\"`")
         review_skipped = source == "implementer" and target == "tester"
         if review_skipped:
             skip_errors = review_skip_errors(record)
@@ -1054,6 +1104,8 @@ def archive(root: Path, args: argparse.Namespace) -> Record:
             raise TrackerError(str(error)) from error
         tree["removed_at"] = now()
     record.update(status="accepted", current_role="parent")
+    if record.get("pr") and record["pr"].get("state") == "open":
+        record["pr"].update(state="merged", merged_at=record["pr"].get("merged_at") or now())
     for item in record.get("assignments", []):
         if item["status"] == "active":
             item.update(status="released", released_at=now())
@@ -1078,6 +1130,8 @@ def abandon(root: Path, args: argparse.Namespace) -> Record:
     record["abandoned"] = {"at": now(), "from_status": record["status"], "reason": args.reason, "user_decision": args.user_decision,
                            "superseded_by": [f"{target_id:04d}" for target_id in args.superseded_by]}
     record.update(status="abandoned", current_role="parent")
+    if record.get("pr"):
+        record["pr"].update(state="closed", closed_at=now())
     touch(record)
     target.mkdir(parents=True, exist_ok=True)
     write_atomic(target / f"{record['feature']}.json", json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -1207,6 +1261,11 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
         raise TrackerError("--parallel runs several executors (implementer) of one spec; use --alongside for a toolsmith beside the fixer")
     if args.assignment and not args.release:
         raise TrackerError("--assignment ID goes with --release")
+    if args.slot_class:
+        queue = queues.ROLE_QUEUE.get(args.role or "")
+        if queue is None or config is None or args.slot_class not in config["slots"][queue]:
+            classes = ", ".join(config["slots"][queue]) if queue and config else "none (worktree mode only)"
+            raise TrackerError(f"--slot-class goes with --role reviewer|tester and a class from {workspace.CONFIG} slots: {classes}")
 
     def change(record: Record) -> None:
         require_confirmation(args.parent_confirmed, "assigning paths")
@@ -1267,7 +1326,7 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
             raise overlap_error(root, clashes, record["feature"], args.role, tracker)
         item = {"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": globs, "status": "active", "at": now(),
                 **({"alongside": True} if args.alongside else {}), **({"branch": tree["branch"]} if tree else {}),
-                **({"batch": args.batch} if args.batch else {})}
+                **({"batch": args.batch} if args.batch else {}), **({"slot_class": args.slot_class} if args.slot_class else {})}
         if source is not None:
             item["carved_from"] = [{"glob": glob, "from": source["id"], "feature": source["feature"]} for glob in carves]
             carve(root, source, carves, item["id"], record["feature"])
@@ -1376,8 +1435,8 @@ def brief(root: Path, args: argparse.Namespace) -> str:
         override = early_gate(root, record, plan_batches(record, number, True), args.parent_confirmed, args.user_decision, "brief")
         if override:
             edit(root, args.feature, set(ROLES), lambda item: item.setdefault("dependency_overrides", []).append(override))
-    if args.role == "tester":
-        test_slot(root, record, args)
+    if args.role in queues.ROLE_QUEUE:
+        queue_slot(root, record, args)
     if args.fresh:
         fresh_assignment(root, args)
     elif args.role in (record["current_role"], record.get("side_role")):
@@ -1431,16 +1490,23 @@ def testing(root: Path, record: Record) -> bool:
         item["status"] == "active" and item["role"] == "tester" and lanes.claimed(root, item["id"]) for item in record.get("assignments", []))
 
 
-def test_slot(root: Path, record: Record, args: argparse.Namespace) -> None:
-    """#77: specs are implemented and reviewed in parallel, but only `test_slots` testers (default 1) run at once."""
+def queue_slot(root: Path, record: Record, args: argparse.Namespace) -> None:
+    """#77: reviewers and testers take slots of their queue's resource classes; a brief waits for the record's slot."""
     config = workspace_config(root, required=False)
-    if config is None:
+    if config is None or args.role != record["current_role"]:
         return
-    busy = [other["feature"] for other in load_all(root) if other["feature"] != record["feature"] and testing(root, other)]
-    if len(busy) >= config["test_slots"] and not (args.parent_confirmed and args.user_decision):
-        raise TrackerError(f"test slot busy: {', '.join(busy)} is being tested (test_slots: {config['test_slots']} in {workspace.CONFIG}). "
-                           "Brief this tester when that one hands off; keep implementing and reviewing other specs meanwhile. "
-                           "Override only with --parent-confirmed --user-decision \"<the user's words>\".")
+    queue = queues.ROLE_QUEUE[args.role]
+    state = queues.sync(root, config)
+    item = queues.find(state, queue, record["feature"])
+    if item is None or item["state"] in queues.TAKEN or (args.parent_confirmed and args.user_decision):
+        return
+    busy = [other["feature"] for other in state["queues"][queue]["items"] if other["state"] in queues.TAKEN and other["class"] == item["class"]]
+    blocked = (record.get("pr") or {}).get("blocking")
+    reason = f"its PR conflicts with main ({'; '.join(blocked)}): `tracker pr return {record['feature']} --parent-confirmed`" if blocked else (
+        f"{', '.join(busy) or 'nobody'} holds the {item['class']} slots ({config['slots'][queue][item['class']]} in {workspace.CONFIG})")
+    raise TrackerError(f"{queue} slot busy: {reason}. {record['feature']} is queued at position {queues.positions(state['queues'][queue]['items'])[record['feature']]}; "
+                       f"run `tracker queue wait {queue} --feature {record['feature']}` as a background command and brief when it exits. "
+                       "Keep implementing and reviewing other specs meanwhile. Override only with --parent-confirmed --user-decision \"<the user's words>\".")
 
 
 def plan_repos(config: Record, record: Record) -> list[str]:
@@ -1554,6 +1620,414 @@ def remove_worktree(root: Path, config: Record, tree: Record, force: bool, decis
     return removed
 
 
+def spec_tree(root: Path, record: Record) -> tuple[Record, Record]:
+    config = workspace_config(root)
+    assert config is not None
+    tree = record.get("worktree")
+    if not tree or tree.get("removed_at"):
+        raise TrackerError(f"{record['feature']} has no worktree; `tracker worktree create {record['feature']} --parent-confirmed` first")
+    return config, tree
+
+
+def open_records(root: Path) -> list[Record]:
+    return [record for record in load_all(root) if (record.get("pr") or {}).get("state") == "open"
+            and record.get("worktree") and not record["worktree"].get("removed_at")]
+
+
+def recheck(root: Path, config: Record) -> list[Record]:
+    """Re-check every open PR against current main (merge-tree, numbered files, `hooks.pr_check`); store the result on each
+    record and return the PRs that now conflict, so they go back to a writer before review or test."""
+    records = open_records(root)
+    report = ci.check_branches(root, config, records)
+    flagged = []
+    for record in records:
+        found = report[record["feature"]]
+        blocking = ci.blocking(found)
+        pr = record["pr"]
+        pr.update(conflicts=found["conflicts"], findings=found["findings"], checked_at=now(), checked_main=found["main_shas"], blocking=blocking)
+        pr["repos"] = {repo: ci.stats(root, config, repo, record["worktree"]["branch"]) for repo in record["worktree"]["repos"]}
+        save(root, record)
+        if blocking:
+            flagged.append({"feature": record["feature"], "status": record["status"], "role": record["current_role"], "blocking": blocking,
+                            "next": f"`tracker pr return {record['feature']} --parent-confirmed`"})
+    return flagged
+
+
+def ci_round(root: Path, feature: str, roles: set[str], tier: str, prepare: Callable[[Record, Record, Record], None] | None = None) -> tuple[Record, Record | None]:
+    """Run a CI tier outside the project lock (it may take minutes), then record it as check `ci-<tier>` on the record.
+    Refuses when the record changed role or the branch moved meanwhile."""
+    with project_lock(root):
+        record = load(root, feature)
+        require_role(record, roles)
+        config, tree = spec_tree(root, record)
+        if prepare:
+            prepare(record, config, tree)
+        if tier not in config["ci"]:
+            return record, None
+        before = ci.heads(root, config, tree["repos"], tree["branch"])
+        edit(root, feature, set(ROLES), lambda item: item.setdefault("pr", {}).update(ci_running={"tier": tier, "at": now()}))
+    result = ci.run(root, config, record["feature"], tree["branch"], tree["repos"], tier, now())
+    with project_lock(root):
+        record = load(root, feature)
+        record.get("pr", {}).pop("ci_running", None)
+        if result is not None:
+            record["checks"].append(ci.check_entry(result, record))
+        touch(record)
+        save(root, record)
+        if record["current_role"] not in roles and record.get("side_role") not in roles:
+            raise TrackerError(f"{feature} moved to the {record['current_role']} while CI ran; nothing else was changed")
+        if ci.heads(root, config, tree["repos"], tree["branch"]) != before:
+            raise TrackerError(f"{tree['branch']} moved while CI ran; commit, then run it again")
+    return record, result
+
+
+def pr_open(root: Path, args: argparse.Namespace) -> Record:
+    """The writer's handoff to review in worktree mode: the branch carries commits, merges cleanly into main, passes the
+    project PR checks and the fast CI tier. A refusal keeps the record with the writer."""
+    warnings: list[str] = []
+
+    def prepare(record: Record, config: Record, tree: Record) -> None:
+        feature, branch = record["feature"], tree["branch"]
+        if record.get("side_role"):
+            raise TrackerError(f"the {record['side_role']} still works alongside; it runs `tracker join {feature} --completed \"...\"` first")
+        writers = [item["id"] for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer"]
+        if len(writers) > 1:
+            raise TrackerError(f"parallel executors still hold lanes ({', '.join(writers)}); each ends with `tracker join {feature} --assignment <ID>`, the last one opens the PR")
+        for repo in tree["repos"]:
+            workspace.checkpoint(root, repo, branch, f"{feature} {record['current_role']} {generation(record)}")
+        if not any(ci.stats(root, config, repo, branch)["ahead"] for repo in tree["repos"]):
+            raise TrackerError(f"no commits on {branch} in {', '.join(tree['repos'])}: nothing to review")
+        errors = gate_errors(root, record, "ready-test", exempt_roles=("tester", "reviewer"), exempt_checks=ci.names(config))
+        if record["current_role"] == "fixer" and any(item["status"] in {"open", "assigned"} for item in record["bugs"]):
+            errors.append("bugs are still open or assigned (`tracker bug fixed` each one)")
+        if errors:
+            raise TrackerError("pr open blocked: " + "; ".join(errors))
+        found = ci.check_branches(root, config, [record] + [other for other in open_records(root) if other["feature"] != feature], feature)[feature]
+        blocking = ci.blocking(found)
+        if blocking:
+            merges = " and ".join(f"`git -C {repo}/{branch} merge {config['main']}`" for repo in tree["repos"])
+            raise TrackerError(f"pr open refused, the record stays with the {record['current_role']}: {'; '.join(blocking)}. "
+                               f"Conflicts: {merges}, resolve, rerun the focused tests, then `pr open` again.")
+        warnings.extend(item["text"] for item in found["findings"] if item["kind"] == "branch")
+
+    record, result = ci_round(root, args.feature, {"implementer", "fixer"}, "fast", prepare)
+    if result is not None and result["result"] != "passed":
+        raise TrackerError(ci.failure_text(result) + f". The record stays with the {record['current_role']}: fix it and run `pr open` again.")
+    with project_lock(root):
+        config, tree = spec_tree(root, record)
+        source = record["current_role"]
+        summary_ = handoff(root, argparse.Namespace(feature=args.feature, to="reviewer", completed=args.completed, remaining=args.remaining,
+                                                    checks_not_run=args.checks_not_run, user_decision=None, question=None, reason=None,
+                                                    parent_confirmed=False, via_pr=True))
+
+        def opened(item: Record) -> None:
+            pr = item.setdefault("pr", {})
+            pr.update(state="open", opened_at=pr.get("opened_at") if pr.get("state") == "open" else now(), merged_at=None,
+                      rounds=int(pr.get("rounds", 0)) + 1, conflicts={}, findings=[], blocking=[], checked_at=now())
+            pr["repos"] = {repo: ci.stats(root, config, repo, tree["branch"]) for repo in tree["repos"]}
+            pr.setdefault("history", []).append({"event": "opened", "role": source, "generation": generation(item), "at": now()})
+
+        edit(root, args.feature, set(ROLES), opened)
+        queues.sync(root, config)
+    return {**summary_, "pr": "open", "ci": f"passed ({result['log']})" if result else "no ci.fast tier in workspace.json",
+            **({"warnings": warnings} if warnings else {})}
+
+
+def ci_command(root: Path, args: argparse.Namespace) -> Record:
+    with project_lock(root):
+        record = load(root, args.feature)
+        if record["current_role"] == "parent":
+            require_confirmation(args.parent_confirmed, "running CI as the parent")
+        config, _ = spec_tree(root, record)
+        if args.tier not in config["ci"]:
+            raise TrackerError(f"no ci tier {args.tier!r} in {workspace.CONFIG}; tiers: {', '.join(config['ci']) or 'none'}")
+    record, result = ci_round(root, args.feature, set(ROLES), args.tier)
+    assert result is not None
+    if result["result"] != "passed":
+        raise TrackerError(ci.failure_text(result))
+    return {"feature": record["feature"], "check": f"ci-{args.tier}", "result": "passed", "log": result["log"], "commands": result["commands"]}
+
+
+def fast_ci(record: Record) -> Record:
+    latest = next((item for item in reversed(record["checks"]) if item["name"] == "ci-fast" and item.get("ci")), None)
+    running = (record.get("pr") or {}).get("ci_running")
+    if running and (latest is None or latest["at"] < running["at"]):
+        return {"result": "running", "branch_shas": {}, "main_shas": {}, "at": running["at"], "log": None, "commands": []}
+    if latest is None:
+        return {"result": "not_run", "branch_shas": {}, "main_shas": {}, "at": None, "log": None, "commands": []}
+    data = latest["ci"]
+    return {"result": latest["result"], "branch_shas": data["branch_shas"], "main_shas": data["main_shas"], "at": latest["at"],
+            "log": data["log"], "commands": data["commands"]}
+
+
+def pr_view(record: Record, state: Record) -> Record:
+    pr = record["pr"]
+    return {"feature": record["feature"], "spec_id": record["feature"][:4], "title": record.get("title", ""), "state": pr.get("state", "open"),
+            "opened_at": pr.get("opened_at"), "merged_at": pr.get("merged_at"), "record_status": record["status"],
+            "current_role": record["current_role"], "repos": pr.get("repos", {}), "fast_ci": fast_ci(record),
+            "review_rounds": int(pr.get("rounds", 0)), "queue": queues.placement(state, record["feature"]),
+            "blocking": pr.get("blocking", []), "findings": pr.get("findings", []), "checked_at": pr.get("checked_at")}
+
+
+def pr_command(root: Path, args: argparse.Namespace) -> Any:
+    if args.action == "open":
+        return pr_open(root, args)
+    with project_lock(root):
+        config = workspace_config(root)
+        assert config is not None
+        if args.action == "return":
+            return pr_return(root, config, args)
+        recheck(root, config)
+        state = queues.sync(root, config)
+        records = load_all(root)
+        if args.feature:
+            records = [load(root, args.feature)] if record_path(root, args.feature).exists() else [load(root, args.feature, archived=True)]
+        else:
+            records += [load(root, path.stem, archived=True) for path in sorted((root / "implementation" / "archive").glob("*.json"))]
+        return {"prs": [pr_view(record, state) for record in records if record.get("pr")]}
+
+
+def return_to_fixer(root: Path, feature: str, title: str, evidence: str, rereview: bool) -> Record:
+    """Merge queue and conflict re-check: the record goes to the fixer with an assigned bug (the parent then assigns the
+    fixer's lane and briefs it). An agent's merge resolution also needs a fresh focused review before it merges."""
+    def change(record: Record) -> None:
+        tree = record["worktree"]
+        bugs = record["bugs"]
+        bugs.append({"id": next_id(bugs, f"BUG-{feature}-"), "title": title, "status": "assigned", "severity": "high", "found_by": "merge-queue",
+                     "spec_ref": "merge queue", "environment": f"branch {tree['branch']} against current main",
+                     "reproduction": f"merge main into {tree['branch']} in {', '.join(tree['repos'])} and run the fast CI tier",
+                     "expected": "merges cleanly and passes the fast CI tier", "actual": title, "evidence": evidence,
+                     "assigned_fixer": "fixer", "fix": "", "regression": "", "retest": ""})
+        if generation_has_work(record):
+            bump_generation(record, f"merge queue: {title}")
+        for item in record.get("assignments", []):
+            if item["status"] == "active":
+                item.update(status="released", released_at=now(), released_by="merge-queue")
+        record.pop("side_role", None)
+        record.update(current_role="fixer", status="fixing")
+        record["handoff"] = {"from": "parent", "completed": f"merge queue: {title}", "remaining": f"fix {bugs[-1]['id']}, then `tracker pr open`",
+                             "checks_not_run": "", "next_role": "fixer"}
+        if rereview:
+            record["rereview_required"] = {"reason": title, "at": now()}
+        pr = record.setdefault("pr", {"state": "open", "opened_at": now(), "rounds": 0})
+        pr.setdefault("history", []).append({"event": "returned", "reason": title, "at": now()})
+
+    result = edit(root, feature, set(ROLES), change)
+    bug = load(root, feature)["bugs"][-1]["id"]
+    return {**result, "bug": bug, "next": f"`tracker assign {feature} --role fixer --from-plan --parent-confirmed`, then "
+                                          f"`tracker brief {feature} --role fixer` (bug {bug})"}
+
+
+def pr_return(root: Path, config: Record, args: argparse.Namespace) -> Record:
+    require_confirmation(args.parent_confirmed, "returning a PR to the fixer")
+    record = load(root, args.feature)
+    spec_tree(root, record)
+    blocking = (record.get("pr") or {}).get("blocking") or []
+    if not args.reason and not blocking:
+        raise TrackerError(f"{record['feature']}'s PR has no recorded conflict; run `tracker pr status` to re-check, or pass --reason")
+    title = args.reason or f"conflicts with main: {'; '.join(blocking)}"
+    return return_to_fixer(root, record["feature"], title[:300], "; ".join(blocking) or args.reason, rereview=True)
+
+
+def wait_time(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(workspace.seconds(value, "--timeout"))
+    except workspace.WorkspaceError as error:
+        raise TrackerError(str(error).replace(f"{workspace.CONFIG}: ", "")) from error
+
+
+WAIT_POLL = 2.0
+
+
+def queue_wait(root: Path, config: Record, args: argparse.Namespace) -> Record:
+    limit = wait_time(args.timeout)
+    deadline = None if limit is None else time.monotonic() + limit
+    while True:
+        with project_lock(root):
+            state = queues.sync(root, config)
+            item = queues.ready(state, args.queue, args.feature)
+            if item is None and args.feature and queues.find(state, args.queue, args.feature) is None:
+                record = load(root, args.feature)
+                raise TrackerError(f"{args.feature} is not in the {args.queue} queue (status {record['status']}, with the {record['current_role']})"
+                                   + ("; `tracker queue add merge <feature> --parent-confirmed` after gate acceptance" if args.queue == "merge" else ""))
+        if item is not None:
+            role = queues.QUEUE_ROLE[args.queue]
+            follow = (f"`tracker queue run merge --parent-confirmed`" if args.queue == "merge"
+                      else f"`tracker brief {item['feature']} --role {role}` to a fresh {role} (or resume the earlier one)")
+            return {"queue": args.queue, **item, "next": follow}
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TrackerError(f"timed out after {args.timeout} waiting for a {args.queue} slot" + (f" for {args.feature}" if args.feature else ""))
+        time.sleep(WAIT_POLL)
+
+
+def queue_command(root: Path, args: argparse.Namespace) -> Any:
+    config = workspace_config(root)
+    assert config is not None
+    if args.action == "wait":
+        return queue_wait(root, config, args)
+    if args.action == "run":
+        return merge_run(root, config, args)
+    with project_lock(root):
+        if args.action == "status":
+            state = queues.sync(root, config)
+            return queues.view(state, config, load_all(root), root)
+        return queue_add(root, config, args)
+
+
+def queue_add(root: Path, config: Record, args: argparse.Namespace) -> Record:
+    require_confirmation(args.parent_confirmed, "queue add")
+    record = load(root, args.feature)
+    slots = config["slots"][args.queue]
+    if args.slot_class and args.slot_class not in slots:
+        raise TrackerError(f"unknown {args.queue} class {args.slot_class}; {workspace.CONFIG} slots: {', '.join(slots)}")
+    if args.queue == "merge":
+        require_role(record, {"parent"})
+        _, tree = spec_tree(root, record)
+        errors = gate_errors(root, record, "acceptance")
+        if errors:
+            raise TrackerError("merge queue after the acceptance gate passes: " + "; ".join(errors))
+        if (record.get("pr") or {}).get("state") != "open":
+            edit(root, record["feature"], set(ROLES), lambda item: item.setdefault("pr", {}).update(
+                state="open", opened_at=now(), merged_at=None, rounds=int((item.get("pr") or {}).get("rounds", 0))))
+    elif not queues.wanted(args.queue, record):
+        raise TrackerError(f"{record['feature']} is {record['status']} with the {record['current_role']}; the {args.queue} queue takes records "
+                           f"handed to the {queues.QUEUE_ROLE[args.queue]} (they join it automatically)")
+    state = queues.sync(root, config)
+    item = queues.enqueue(state, args.queue, record["feature"], args.slot_class or workspace.default_class(config, args.queue), args.priority, now())
+    if args.slot_class:
+        item["class"] = args.slot_class
+    item["priority"] = args.priority if args.priority else item.get("priority", 0)
+    queues.save(root, state)
+    if args.slot_class and args.queue != "merge":
+        edit(root, record["feature"], set(ROLES), lambda item: [lane.update(slot_class=args.slot_class) for lane in item.get("assignments", [])
+                                                               if lane["status"] == "active" and lane["role"] == queues.QUEUE_ROLE[args.queue]])
+    state = queues.sync(root, config)
+    item = queues.find(state, args.queue, record["feature"]) or {}
+    return {"queue": args.queue, **item, "position": queues.positions(state["queues"][args.queue]["items"]).get(record["feature"]),
+            "next": f"`tracker queue wait {args.queue} --feature {record['feature']}` (background)"}
+
+
+def merge_outcome(root: Path, config: Record, feature: str, result: str, detail: Record) -> None:
+    state = queues.load(root)
+    state["queues"]["merge"]["items"] = [item for item in state["queues"]["merge"]["items"] if item["feature"] != feature]
+    state["queues"]["merge"]["last"] = {"feature": feature, "result": result, "at": now(), **detail}
+    queues.save(root, state)
+    queues.sync(root, config)
+
+
+def merge_run(root: Path, config: Record, args: argparse.Namespace) -> Record:
+    """One merge-queue item: merge main into the spec branch (a conflict returns it to the fixer), the fast tier and
+    `hooks.pre_merge` on the merged tree (a failure returns it too), then fast-forward main, archive, re-check open PRs,
+    and run `hooks.post_merge` on main."""
+    require_confirmation(args.parent_confirmed, "queue run merge")
+    with project_lock(root):
+        state = queues.sync(root, config)
+        items = state["queues"]["merge"]["items"]
+        running = next((item for item in items if item["state"] == "running"), None)
+        if running:
+            raise TrackerError(f"merge queue busy: {running['feature']} is merging since {running['started_at']} "
+                               f"(a dead run frees after the lease, {config['lease']}s)")
+        head = next((item for item in queues.ordered(items) if item["state"] == "granted"), None)
+        if head is None:
+            return {"result": None, "message": "merge queue is empty"}
+        feature = head["feature"]
+        record = load(root, feature)
+        _, tree = spec_tree(root, record)
+        branch = tree["branch"]
+        errors = gate_errors(root, record, "acceptance")
+        if errors:
+            merge_outcome(root, config, feature, "blocked", {"errors": errors})
+            raise TrackerError(f"{feature} left the merge queue, its acceptance gate fails: " + "; ".join(errors))
+        clashes = [f"{repo}/{name}" for repo in tree["repos"] for name in workspace.conflicts(root / repo / config["main"], branch)]
+        if clashes:
+            returned = return_to_fixer(root, feature, f"merge conflict with main in {', '.join(clashes)}",
+                                       f"git merge-tree against main conflicts in {', '.join(clashes)}; merge main into the branch and resolve",
+                                       rereview=True)
+            merge_outcome(root, config, feature, "conflict", {"files": clashes})
+            return {"feature": feature, "result": "conflict", "files": clashes, "bug": returned["bug"], "next": returned["next"],
+                    "queue_next": next_merge(root, config)}
+        for repo in tree["repos"]:
+            checkout = root / repo / branch
+            if workspace.git(root / repo / config["main"], "status", "--porcelain", "--untracked-files=no").stdout.strip():
+                raise TrackerError(f"{repo}/{config['main']} has uncommitted changes; commit or stash them before merging")
+            workspace.checkpoint(root, repo, branch, f"{feature} final")
+            if not workspace.merged(checkout, config["main"]):
+                workspace.git(checkout, "merge", "--no-edit", "-m", f"Merge {config['main']} into {branch}", config["main"])
+        head.update(state="running", started_at=now())
+        queues.save(root, state)
+    try:
+        record, result = ci_round(root, feature, {"parent"}, "fast")
+    except (TrackerError, workspace.WorkspaceError):
+        with project_lock(root):
+            state = queues.load(root)
+            for item in state["queues"]["merge"]["items"]:
+                if item["feature"] == feature and item["state"] == "running":
+                    item.update(state="granted")
+                    item.pop("started_at", None)
+            queues.save(root, state)
+        raise
+    hooks = ci.run_hooks(root, config, "pre_merge", feature, branch) if result is None or result["result"] == "passed" else []
+    failed = hooks[-1] if hooks and hooks[-1]["exit"] else None
+    with project_lock(root):
+        if (result and result["result"] != "passed") or failed:
+            title = ci.failure_text(result) if result and result["result"] != "passed" else \
+                f"pre_merge hook `{failed['command']}` exited {failed['exit']}: {failed.get('tail', '')}" if failed else ""
+            returned = return_to_fixer(root, feature, f"after merging main: {title}"[:300], title, rereview=False)
+            merge_outcome(root, config, feature, "ci_failed", {"log": result["log"] if result else None})
+            return {"feature": feature, "result": "ci_failed", "failure": title, "bug": returned["bug"], "next": returned["next"],
+                    "queue_next": next_merge(root, config)}
+        snapshot = {repo: ci.stats(root, config, repo, branch) for repo in tree["repos"]}
+        for repo in tree["repos"]:
+            workspace.git(root / repo / config["main"], "merge", "--ff-only", branch)
+
+        def merged(item: Record) -> None:
+            item["worktree"]["merged_at"] = now()
+            pr = item.setdefault("pr", {"opened_at": now(), "rounds": 0})
+            pr.update(state="merged", merged_at=now(), repos=snapshot, blocking=[], conflicts={})
+            pr.setdefault("history", []).append({"event": "merged", "at": now()})
+
+        edit(root, feature, set(ROLES), merged)
+        archived = archive(root, argparse.Namespace(feature=feature, parent_confirmed=True))
+        spec_archived = spec_archive(root, feature)
+        merge_outcome(root, config, feature, "merged", {})
+        flagged = recheck(root, config)
+        queues.sync(root, config)
+    post = ci.run_hooks(root, config, "post_merge", feature, None)
+    return {"feature": feature, "result": "merged", "removed_worktrees": archived.get("removed_worktrees", []), "spec_archive": spec_archived,
+            "pre_merge": hooks, "post_merge": post, "conflicting_prs": flagged, "queue_next": next_merge(root, config)}
+
+
+def spec_archive(root: Path, feature: str) -> str:
+    process = subprocess.run([sys.executable, str(briefs.SPEC_CLI), "--json", "archive", str(int(feature[:4])), "--parent-confirmed"],
+                             cwd=root, capture_output=True, text=True)
+    if process.returncode == 0:
+        return "archived"
+    return f"failed, run `spec archive {int(feature[:4])} --parent-confirmed`: {(process.stdout or process.stderr).strip()[-300:]}"
+
+
+def next_merge(root: Path, config: Record) -> Record | None:
+    with project_lock(root):
+        state = queues.sync(root, config)
+    item = next((item for item in queues.ordered(state["queues"]["merge"]["items"]) if item["state"] == "granted"), None)
+    return {"feature": item["feature"], "next": "`tracker queue run merge --parent-confirmed`"} if item else None
+
+
+def ui_command(root: Path, args: argparse.Namespace) -> None:
+    try:
+        from tracker_ui import server  # noqa: PLC0415 (optional dashboard package)
+    except ImportError as error:
+        if (error.name or "").split(".")[0] != "tracker_ui":
+            raise
+        raise TrackerError(f"the dashboard package is missing: {Path(__file__).resolve().parent / 'tracker_ui'} (tracker_ui/server.py); "
+                           "update the plugin") from error
+    if not args.no_open:
+        threading.Timer(1.0, webbrowser.open, (f"http://{args.host}:{args.port}/",)).start()
+    server.main(root, args.port, args.host)
+    return None
+
+
 def status(root: Path, args: argparse.Namespace) -> Any:
     if getattr(args, "feature", None):
         return summary(load(root, args.feature), root)
@@ -1566,12 +2040,25 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "spec-check": spec_check, "spec-sync": spec_sync, "archive": archive, "restore": restore, "abandon": abandon, "overlap": overlap,
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
     "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
+    "pr": pr_command, "ci": ci_command, "queue": queue_command, "ui": ui_command,
 }
+# Long-running commands take the project lock per step, so CI runs and waits never block other agents' tracker calls.
+LOCK_FREE = {"pr", "ci", "queue", "ui"}
+# Commands that move records between roles; the queues follow them.
+SYNC_AFTER = {"init", "handoff", "answer", "assign", "claim", "join", "archive", "abandon", "restore", "brief"}
+
+
+def sync_queues(root: Path) -> None:
+    config = workspace_config(root, required=False)
+    if config is not None:
+        queues.sync(root, config)
 
 
 def output(value: Any, as_json: bool) -> None:
     if as_json:
         print(json.dumps({"ok": True, "result": value}, separators=(",", ":")))
+    elif value is None:
+        return
     elif isinstance(value, str):
         print(value, end="")
     elif isinstance(value, list):
@@ -1581,6 +2068,19 @@ def output(value: Any, as_json: bool) -> None:
                 print(f"{item['feature']}: {item['status']} ({item['current_role']}){early}")
             else:
                 print(" | ".join(f"{key}: {field}" for key, field in item.items()))
+    elif "prs" in value:
+        for item in value["prs"]:
+            place = f", {item['queue']['name']} queue #{item['queue']['position']}" if item["queue"]["name"] else ""
+            print(f"{item['feature']}: PR {item['state']}, {item['record_status']} ({item['current_role']}), fast CI {item['fast_ci']['result']}, "
+                  f"rounds {item['review_rounds']}{place}" + (f"; BLOCKED: {'; '.join(item['blocking'])}" if item["blocking"] else ""))
+    elif "queues" in value:
+        for name, entry in value["queues"].items():
+            holders = ", ".join(f"{item['feature']} [{item['class']}, {item['state']}]" for item in entry["holders"]) or "none"
+            waiting = ", ".join(f"{item['position']}. {item['feature']} [{item['class']}]" + (" BLOCKED" if item.get("blocked") else "")
+                                for item in entry["waiting"]) or "none"
+            print(f"{name}: slots {entry['slots']}; holders: {holders}; waiting: {waiting}")
+        for item in value["agents"]:
+            print(f"agent {item['assignment']}: {item['role']} on {item['feature']} since {item['claimed_at']}")
     elif "lines" in value:
         print(f"tools: {value['tools']}; stale: {', '.join(value['stale']) or 'none'}")
         for line in value["lines"]:
@@ -1599,12 +2099,19 @@ def output(value: Any, as_json: bool) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
+    args.json = args.json or getattr(args, "json_after", False)
     try:
         root = find_root()
-        with project_lock(root):
+        if args.command in LOCK_FREE:
             output(HANDLERS[args.command](root, args), args.json)
+            return 0
+        with project_lock(root):
+            value = HANDLERS[args.command](root, args)
+            if args.command in SYNC_AFTER:
+                sync_queues(root)
+            output(value, args.json)
         return 0
-    except TrackerError as error:
+    except (TrackerError, workspace.WorkspaceError) as error:
         if args.json:
             print(json.dumps({"ok": False, "error": {"code": "tracker_error", "message": str(error)}}, separators=(",", ":")))
         else:

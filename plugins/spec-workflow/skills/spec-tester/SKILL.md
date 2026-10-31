@@ -31,7 +31,7 @@ Before executing anything, map each requirement and plan item to the capabilitie
 
 - Confirm with `status` that the record is `ready_for_test` or `ready_for_retest`. If the handoff is incomplete, report that to the parent; don't guess at missing setup.
 - Use the toolchain command prefix the parent supplied, in the brief's `Worktree:` checkout. If you cannot build, run, or reach required services, stop and hand off to the parent with the failure. **Never verify by reading code alone.**
-- You hold the project's test slot: run one isolated stack, run the full suite once, and tear the stack down before your handoff so the next spec's tester can start.
+- Your `claim` holds a test-queue slot and your handoff frees it: run one isolated stack, run the full suite once, and tear the stack down before your handoff so the next spec's tester can start. Fast CI (`ci-fast`) is the implementer's evidence, not yours.
 - Prepare isolated test data. Never put secrets in the record.
 - Batch independent reads, greps, and status commands as parallel calls in one turn; read files in bounded ranges.
 - Run tests in parallel:

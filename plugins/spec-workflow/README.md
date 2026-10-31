@@ -57,7 +57,7 @@ Agents inherit your default model. Set the tiers per agent, e.g. `"agent": {"spe
 | Agent | `spec-implementer` (executor), `spec-fixer` (execution tier) | Code-editing roles |
 | Agent | `spec-toolsmith` | Builds toolkit tools for recorded tool gaps; edits toolkit locations only |
 | Agent | `spec-reviewer` (deep-reasoning tier), `spec-tester` (execution tier) | Read-only roles (no Edit/Write tools) |
-| Hook | `guard_paths.py` | Blocks direct edits and shell writes to `implementation/{active,archive}/`, `spec-archive.json`, and `toolkit.json`; blocks creating spec files outside `spec.py new`; blocks edits to accepted specs unless unlocked; blocks subagent edits and shell writes to `specs/` (except `specs/.drafts/`) and subagent `spec.py new/archive/restore/unlock/relock/defer/undefer/promote/adopt` |
+| Hook | `guard_paths.py` | Blocks direct edits and shell writes to `implementation/{active,archive}/`, `spec-archive.json`, `toolkit.json`, `queues.json`, and `ci/`; blocks creating spec files outside `spec.py new`; blocks edits to accepted specs unless unlocked; blocks subagent edits and shell writes to `specs/` (except `specs/.drafts/`) and subagent `spec.py new/archive/restore/unlock/relock/defer/undefer/promote/adopt` |
 | Hook | `brief_check.py` | Advisory: warns when a spec-workflow Agent/Task prompt lacks the `tracker brief` marker |
 | Bin | `spec`, `spec-tracker` | Wrappers for the two CLIs |
 | OpenCode | `opencode/plugin.js` | 1.x and 2.x plugin: skills, agents (1.x), the same `guard_paths.py`, `PATH`, tool-name mapping |
@@ -72,6 +72,7 @@ specs/NNNN-<slug>.md            # every spec: feature | change | removal | conve
                                 # recommended: a convention spec for pagination, errors, status codes, timeouts
 implementation/preflight.json   # {"commands": [...]} every agent must be able to run
 implementation/toolkit.json     # created by `spec-tracker toolkit add`; durable test tools (mocks, seeders, fe driver, ...)
+implementation/workspace.json   # optional worktree mode: repos, slots, ci tiers, hooks (orchestrator procedures › Worktree mode)
 ```
 
 Then ask the agent to "implement all specs" (`spec-orchestrator`) or to write a spec (`write-specs`).
@@ -86,6 +87,31 @@ export PATH="<clone>/plugins/spec-workflow/bin:$PATH"                           
 ```
 
 Don't use `SPEC="python3 .../spec.py"; $SPEC validate`: zsh doesn't word-split `$SPEC`. Use the wrappers, a shell function, or the full command. Agents spell out the full command in each Bash call, since shell state doesn't persist between calls.
+
+## Dashboard
+
+A read-only local web dashboard shows pull requests, queues and agents, the spec pipeline, the spec reader, and activity. Python stdlib only, no build step, served on `127.0.0.1`; it never writes to the project.
+
+```
+cd skills/spec-tracker/scripts && python3 -m tracker_ui --root <project> [--port 8733] [--host 127.0.0.1]
+```
+
+(`spec_tracker.py ui` starts the same server once that hook is available.) Data comes from the tracker and spec CLIs (`--json`) and from `implementation/` and `specs/`. If `pr status` or `queue status` is missing, the pull-request list is derived from the records and the Queues page says "Queues not available". The page updates live through server-sent events when files under `implementation/` or `specs/` change. Routes: `#/pulls`, `#/pull/<feature>`, `#/queues`, `#/specs`, `#/spec/<id>`, `#/activity`; JSON under `/api/` (`prs`, `queues`, `specs`, `spec/<id>`, `record/<feature>`, `activity`, `meta`, `events`).
+
+## Local PRs and queues (worktree mode)
+
+```bash
+spec-tracker pr open <feature> --completed "..." --remaining "..."   # writer: commits, merge-tree vs main, PR checks, ci.fast -> reviewer
+spec-tracker pr status [<feature>] [--json]       # open PRs re-checked against main; pr return <feature> --parent-confirmed
+spec-tracker ci run <feature> [--tier full]       # records check ci-<tier> (log under implementation/ci/<feature>/)
+spec-tracker queue status [--json]                # review, test, merge: slots, holders, waiting; running agents
+spec-tracker queue wait review|test|merge [--feature F] [--timeout D]   # background command; exits 0 when the item has a slot
+spec-tracker queue add merge <feature> --parent-confirmed   # after gate acceptance
+spec-tracker queue run merge --parent-confirmed   # merge main in, ci.fast + pre_merge, ff main, archive, re-check PRs, post_merge
+spec-tracker ui [--port 8733] [--no-open]         # the dashboard (tracker_ui)
+```
+
+`pr status --json` returns `{"prs": [{feature, spec_id, title, state, opened_at, merged_at, record_status, current_role, repos: {<repo>: {branch, path, head, main, ahead, behind, conflicts, additions, deletions, files}}, fast_ci: {result, branch_shas, main_shas, at, log, commands}, review_rounds, queue: {name, position}, blocking, findings}]}`; `queue.position` is 0 while the item holds a slot. `queue status --json` returns `{"queues": {review|test|merge: {slots, holders: [{feature, class, since, assignment, state}], waiting: [{feature, class, since, position, priority}]}, merge.last: {feature, result, at}}, "agents": [{assignment, feature, role, model, batch, claimed_at}]}`.
 
 ## Enforcement levels
 
@@ -251,6 +277,17 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 ## Changes in 0.10.6
 
 - Worktree mode: `env` in workspace.json overrides keys in copied dotenv files (`{"env": {"be": {".env": {"DATABASE_URL": "..."}}}}`), so spec checkouts can't reach the dev database. In m33 a checkout that inherited `.env` migrated the dev database to an unmerged branch's migration; the documented example now overrides it.
+
+## Changes in 0.11.0
+
+Local PRs, CI, and queues in worktree mode, from the m33 run (the parent hand-scheduled the test slot, 0082 and 0087 both took migration 52 and the conflict surfaced only at merge, agents ran full suites repeatedly).
+
+- `tracker pr open`: the writer's handoff to review. It commits the checkout and refuses, keeping the record with the writer, when the branch has no commits, `git merge-tree` finds conflicts with main, a PR check blocks, or the fast CI tier fails. With a `ci` section a writer's direct `handoff --to reviewer` is refused; briefs name `pr open`. `pr status` re-checks every open PR against current main; `pr return` sends a conflicting one to the fixer.
+- workspace.json `ci` tiers per repo (`fast`, optionally `full`) run in the spec checkout with the worktree path rewrite, outside the project lock. Each run is check `ci-<tier>` with commands, exit codes, seconds, branch and main SHAs, and a log under `implementation/ci/<feature>/`; only CI runs record it. The acceptance gate needs a passing `ci-fast` on the branch's current SHAs. `tracker ci run` reruns a tier.
+- `hooks`: `duplicate_numbers` (built in: a branch adding a numbered file, e.g. a migration, whose number main or another open branch already uses), `pr_check`, `pre_merge`, `post_merge` commands.
+- Queues (`implementation/queues.json`): review, test, and merge, with slots per resource class (`slots`; `test_slots: N` still means `{"test": {"default": N}}`), auto-enqueue on `ready_for_review`, `ready_for_test`, and `ready_for_retest` (priority 1), `assign --slot-class`, a `lease` (default 2h) for dead agents, `queue status`, `queue add`, and `queue wait` (a background command that exits when the item has a slot). A reviewer or tester brief without a slot refuses and names `queue wait`, replacing the "test slot busy" refusal.
+- Merge queue: `queue run merge` merges main into the spec branch, runs the fast tier and `pre_merge`, fast-forwards main, archives the record and spec, removes the checkouts, re-checks open PRs, runs `post_merge`, and reports the next item. A conflict or CI failure returns the record to the fixer with an assigned bug; a conflict also requires a fresh focused review (`rereview_required`, checked by the acceptance gate and shown in the reviewer's brief).
+- `tracker ui` starts the read-only dashboard (`tracker_ui`, imported lazily).
 
 ## Changes in 0.10.7
 

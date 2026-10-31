@@ -19,10 +19,10 @@ Each mutation requires the record's current role:
 |---|---|---|
 | parent | `requirement add/import`, `bug assign/close`, `check waive`, `blocker resolve`, `tool-gap defer`, `assign`, `answer`, `plan add`, `spec-sync`, `archive`, `restore`; light path (below) | planner, implementer, reviewer, tester, fixer, toolsmith (open tool gaps) |
 | planner | `plan add`, `blocker add` | parent (after `plan add`) |
-| implementer | `requirement implemented`, `file add`, `check add`, `blocker add` | reviewer, tester (see below), parent |
+| implementer | `requirement implemented`, `file add`, `check add`, `blocker add`, `pr open` | reviewer (`pr open` in worktree mode), tester (see below), parent |
 | reviewer | `check add`, `bug add`, `tool-gap add`, `blocker add` | tester (no open bugs or tool gaps), parent |
 | tester | `requirement tested`, `check add`, `bug add/verify/reopen`, `tool-gap add`, `blocker add` | parent |
-| fixer | `file add`, `check add`, `bug fixed`, `blocker add` | reviewer, parent |
+| fixer | `file add`, `check add`, `bug fixed`, `blocker add`, `pr open` | reviewer (`pr open` in worktree mode), parent |
 | toolsmith | `file add`, `check add`, `tool-gap resolve`, `blocker add` | tester (no open tool gaps), parent |
 
 Normal flow: `init` (the record starts with the parent, status `new`) → parent derives requirements → planner → parent (`assign --from-plan`) → implementer (executor, per batch) → reviewer → tester → parent. Findings go back through parent → fixer → fresh review → tester; tool gaps through parent → toolsmith → tester. No role hands off to the tester while a tool gap is open.
@@ -65,7 +65,11 @@ tracker overlap [--depth N | --plans]            # --plans: planned/assigned glo
 tracker assign|brief|claim ...                  # lanes and generated delegation prompts (parent); brief --fresh renews the assignment
 tracker assign <feature> --role r --carve <glob> --from <ASSIGNMENT> [--paths ...] --parent-confirmed   # take a narrow glob from another spec's lane
 tracker spec-sync <feature> --reason "..." --parent-confirmed   # re-imports; invalidates only changed/new requirements; plan kept, marked stale
+tracker pr open <feature> --completed "..." --remaining "..."   # writer, worktree mode; also: pr status [<feature>], pr return, ci run <feature>
+tracker queue status | wait review|test|merge [--feature F] [--timeout 2h] | add <queue> <feature> | run merge   # ui: dashboard
 ```
+
+**PRs and queues** (worktree mode, procedures › Local PRs, CI, and queues). The writer's last command is `pr open`, which refuses (record kept with the writer) on a branch without commits, a conflict with main, a blocking PR check (e.g. a reused migration number), or a failing fast CI tier; with a `ci` section in workspace.json the direct `handoff --to reviewer` is refused. Records join the review queue (`ready_for_review`) and test queue (`ready_for_test`, `ready_for_retest` first) by themselves; `brief --role reviewer|tester` needs the record's slot, else it names `queue wait`. Your `claim` holds the slot and your handoff frees it. `ci-*` checks are recorded only by CI runs; they are the writer's evidence and never replace the reviewer or tester.
 
 **Claims.** `claim <assignment>` (an agent's first command) binds the agent to its lane; the hook refuses a second agent's claim. Every `brief` targets a new agent: when the role's active assignment is already claimed, `brief` reissues it (same paths, new ID, the old one released as `brief: claimed by an earlier agent`) and warns on stderr. This covers a finished agent and one that died at the usage limit. To continue the earlier agent instead, resume it with SendMessage and no new brief. `--fresh` forces a new assignment even when it is unclaimed.
 
@@ -81,7 +85,7 @@ Bug, blocker, gap, and assignment IDs are fully qualified (`BUG-<feature>-001`);
 
 A gate error for a failed or `not_run` check names the role that must re-record it (the reviewer or tester for their own checks, else the fixer) and the parent's exact handoff command; that role re-records it under the same name.
 
-`acceptance` additionally requires every requirement tested, every bug `verified` or `closed_not_a_bug`, no open tool gap (resolved or deferred with a user decision), no check whose latest result is `not_run` or `failed` (including the tester's own), a passing check **recorded by the reviewer**, and a passing check **recorded by the tester**. Static code reading alone cannot satisfy the tester's part. A passing gate lists parent-attested requirements and `not_applicable` checks.
+`acceptance` additionally requires every requirement tested, every bug `verified` or `closed_not_a_bug`, no open tool gap (resolved or deferred with a user decision), no check whose latest result is `not_run` or `failed` (including the tester's own), a passing check **recorded by the reviewer**, and a passing check **recorded by the tester**. Static code reading alone cannot satisfy the tester's part. With a `ci.fast` tier in workspace.json it also needs a passing `ci-fast` on the branch's current SHAs, and after the merge queue returned a conflict, a reviewer check passed after it. A passing gate lists parent-attested requirements and `not_applicable` checks.
 
 A `not_run` check doesn't block review or (re)test handoffs, but it blocks acceptance: run it, or the parent asks the user for a waiver. Always name it in your report. A missing toolchain or database is an environment defect to fix, never a waiver reason. `not_applicable` (with the reason as evidence) is for a check that doesn't apply, such as a missing inspection `check all`; it never blocks.
 
