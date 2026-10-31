@@ -150,7 +150,8 @@ def number_findings(root: Path, config: Record, branches: dict[str, Record]) -> 
         for feature, numbers in added.items():
             for value, mine in numbers.items():
                 clash = sorted(on_main.get(value, set()) - mine)
-                if clash or len(mine) > 1:
+                # Files sharing a stem (000057_x.up.sql, 000057_x.down.sql) are one numbered entry.
+                if clash or len({PurePosixPath(path).name.split(".")[0] for path in mine}) > 1:
                     found[feature].append({"kind": "main", "text": f"{repo}: {', '.join(sorted(mine))} reuses number {value} "
                                                                    f"({', '.join(clash) or 'twice in this branch'}{' on main' if clash else ''}); renumber it"})
                 for other, theirs in added.items():

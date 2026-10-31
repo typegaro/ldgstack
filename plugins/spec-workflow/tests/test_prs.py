@@ -169,6 +169,12 @@ class MigrationNumberTest(PrCase):
         self.assertEqual([item["kind"] for item in prs[FEATURE]["findings"]], ["branch"])
         self.assertEqual(prs[FEATURE]["blocking"], [])
 
+    def test_up_and_down_files_of_one_migration_are_one_number(self) -> None:
+        self.implement_in_branch(FEATURE, "db/migrations/000057_keys.up.sql")
+        self.branch_file(FEATURE, "db/migrations/000057_keys.down.sql")
+        self.open_pr(FEATURE)
+        self.assertEqual(self.tracker("pr", "status")["result"]["prs"][0]["blocking"], [])
+
 
 class CiGateTest(PrCase):
     def test_acceptance_needs_fast_ci_on_the_current_branch(self) -> None:
