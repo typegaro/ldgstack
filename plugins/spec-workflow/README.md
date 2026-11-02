@@ -307,3 +307,11 @@ From the pilot 0082/0087/0088 run.
 ## Changes in 0.11.2
 
 - Dashboard: a **Backlog** section (`#/backlog`, `/api/backlog`) shows the work no agent has started: ready to start, waiting on other specs (with their current stage), planned but not started (record and plan, no code yet), deferred (with the recorded reason), and decision specs to accept. Each spec shows its kind, requirement count, and wave. The nav count and a link under the pull requests cover the work groups (ready, waiting, planned).
+
+## Changes in 0.12.0
+
+- Light fix rounds: a fixer whose round fixed only low bugs, with at most `light_fix.max_lines` changed lines (default 20) or only test, docs, or config files, and no sensitive path (auth, secrets, crypto, sessions, locks, transactions, migrations), sends it straight to retest with `pr open --light "<why>"` (`handoff --to tester --light` without CI). The tracker measures the diff from the round's starting heads, refuses otherwise, and records check `rereview-skipped`. High-risk records always get a fresh review. Retest briefs name the round's fix diff so testers can retest narrowly.
+- Merge queue flakes: a failed fast-CI command is re-run once; a pass is recorded as flaky in the check evidence and the `flaky` result. Closing a merge-queue CI bug as not a bug with a user decision restores the reviewed and tested generation while the branch is unchanged.
+- `registries` in workspace.json: files a lane also owns when it touches certain paths (a migration index, a check-count test). `plan add` and batch lanes include them. A batch's `**Files:**` outside the Ownership join it.
+- `brief --batch N` after batch M's lane gives batch N its own lane instead of reissuing M's.
+- `tracker queue hold test --feature F --class stack --run "<command>"`: a writer's stack E2E takes a test slot while it runs.

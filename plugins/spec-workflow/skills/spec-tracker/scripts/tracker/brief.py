@@ -50,6 +50,9 @@ def worktree(record: dict[str, Any], config: dict[str, Any] | None, role: str) -
     if role in ("reviewer", "fixer"):
         text += " Changes under review: " + "; ".join(f"`git -C {repo}/{branch} diff {main}...HEAD`" for repo in tree["repos"])
         text += f" (each writer handoff commits a checkpoint; `git log {main}..HEAD` lists the rounds)."
+    round_ = record.get("fix_round")
+    if role in ("reviewer", "tester") and round_ and round_["generation"] == int(record.get("generation", 1)):
+        text += " This round's fix diff: " + "; ".join(f"`git -C {repo}/{branch} diff {sha[:12]}..HEAD`" for repo, sha in round_["base"].items()) + "."
     flag = record.get("rereview_required")
     if role == "reviewer" and flag:
         text += f" Focus first on the merge with {main} an agent resolved ({flag['reason']}): `git log --merges {main}..HEAD`."

@@ -7,11 +7,15 @@ accepted code and `<repo>/<branch>` per spec. Shared by the tracker, the path-gu
      "slots": {"review": 2, "test": {"stack": 1, "browser": 2}}, "lease": "2h",
      "ci": {"fast": {"be": ["direnv exec . go build ./..."]}, "full": {...}}, "ci_timeout": 1800,
      "hooks": {"pre_merge": ["..."], "post_merge": ["..."], "pr_check": ["..."],
-               "duplicate_numbers": [{"glob": "be/db/migrations/*.sql", "pattern": "^(\\d+)"}]}}
+               "duplicate_numbers": [{"glob": "be/db/migrations/*.sql", "pattern": "^(\\d+)"}]},
+     "registries": [{"when": ["be/db/migrations/*.sql"], "own": ["be/db/migrations/source.go"]}],
+     "light_fix": {"max_lines": 20, "paths": ["**/*_test.go", "**/*.md"], "sensitive": ["**/auth/**"]}}
 
 `env` overrides keys in copied dotenv files, so a spec checkout never points at shared dev or production state.
 `slots` gives each queue (review, test, merge) its resource classes; a flat `{"stack": 1}` means test classes, and
 `test_slots: N` is `{"test": {"default": N}}`. CI commands run in `<repo>/<branch>`, hooks from the project root.
+`registries` adds `own` files (a migration index, a check-count test) to any plan or batch lane that touches `when`.
+`light_fix` sets when a fixer may send a low-severity fix straight to retest (`handoff --to tester --light`).
 
 Lane globs stay repo-relative (`be/internal/**`); in a worktree they select `be/<branch>/internal/**`."""
 from __future__ import annotations
@@ -53,7 +57,8 @@ def load(root: Path) -> dict[str, Any] | None:
         raise WorkspaceError(f'{CONFIG}: "test_slots" must be a positive integer')
     config.update(slots=slot_config(data.get("slots") or {}, config["test_slots"]), lease=seconds(data.get("lease", "2h"), "lease"),
                   ci=ci_config(data.get("ci") or {}, repos), ci_timeout=seconds(data.get("ci_timeout", 1800), "ci_timeout"),
-                  hooks=hook_config(data.get("hooks") or {}))
+                  hooks=hook_config(data.get("hooks") or {}), registries=registry_config(data.get("registries") or []),
+                  light_fix=light_fix_config(data.get("light_fix") or {}))
     return config
 
 
@@ -125,6 +130,36 @@ def hook_config(raw: Any) -> dict[str, Any]:
                                  f'"pattern" regex with one group for the number (default "^(\\d+)", matched on the file name)')
         hooks["duplicate_numbers"].append({"glob": glob, "pattern": pattern})
     return hooks
+
+
+def globs(value: Any, key: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() and not item.startswith("/") for item in value):
+        raise WorkspaceError(f'{CONFIG}: "{key}" must be a list of repo-relative globs')
+    return list(value)
+
+
+def registry_config(raw: Any) -> list[dict[str, list[str]]]:
+    """Files every lane that touches `when` also owns, e.g. the migration index beside a new migration."""
+    if not isinstance(raw, list) or not all(isinstance(rule, dict) for rule in raw):
+        raise WorkspaceError(f'{CONFIG}: "registries" must be a list of {{"when": ["<glob>", ...], "own": ["<path>", ...]}}')
+    return [{"when": globs(rule.get("when"), "registries.when"), "own": globs(rule.get("own"), "registries.own")} for rule in raw]
+
+
+# A light fix touches only these (or stays under max_lines), and never a sensitive path.
+LIGHT_PATHS = ["**/*_test.*", "**/*.test.*", "**/*.spec.*", "**/test/**", "**/tests/**", "**/__tests__/**", "**/testdata/**",
+               "**/*.md", "docs/**", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml"]
+SENSITIVE_PATHS = ["**/migrations/**", "**/*.sql", "**/*auth*", "**/*auth*/**", "**/*secret*", "**/*crypt*", "**/*credential*",
+                   "**/*permission*", "**/*session*", "**/*lock.*", "**/*locking*", "**/*mutex*", "**/*lease*", "**/*transaction*"]
+
+
+def light_fix_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) - {"max_lines", "paths", "sensitive"}:
+        raise WorkspaceError(f'{CONFIG}: "light_fix" takes "max_lines", "paths" and "sensitive"')
+    limit = raw.get("max_lines", 20)
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+        raise WorkspaceError(f'{CONFIG}: "light_fix.max_lines" must be a non-negative integer')
+    return {"max_lines": limit, "paths": globs(raw.get("paths", LIGHT_PATHS), "light_fix.paths"),
+            "sensitive": SENSITIVE_PATHS + globs(raw.get("sensitive", []), "light_fix.sensitive")}
 
 
 def default_class(config: dict[str, Any], queue: str) -> str:

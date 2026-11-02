@@ -166,6 +166,12 @@ def latest_checks(record: dict[str, Any]) -> list[dict[str, Any]]:
     return list({item["name"]: item for item in record["checks"] if in_current_generation(record, item)}.values())
 
 
+def review_passes(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Passing reviewer checks, plus a light fix round's `rereview-skipped` check (it stands in for the fresh review)."""
+    return [item for item in checks if item["result"] == "passed"
+            and (item.get("role") == "reviewer" or (item["name"] == "rereview-skipped" and item.get("light")))]
+
+
 def reran_not_run(record: dict[str, Any], check: dict[str, Any]) -> bool:
     """Whether `check` supersedes a not_run result of the same name and role in the current generation."""
     earlier = [item for item in record["checks"] if item is not check and item["name"] == check["name"] and item["at"] <= check["at"]
@@ -210,11 +216,12 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
                           f"`tracker check waive {feature} <check> --reason \"...\" --user-decision \"...\" --parent-confirmed`)")
         if any(not item["tested"] for item in requirements):
             errors.append(f"requirements not independently tested: {', '.join(item['id'] for item in requirements if not item['tested'])}")
-        for role, label in (("reviewer", "code review by the reviewer"), ("tester", "check executed by the independent tester")):
-            if not any(item["result"] == "passed" and item.get("role") == role for item in checks):
-                errors.append(f"no passing {label}")
+        if not review_passes(checks):
+            errors.append("no passing code review by the reviewer")
+        if not any(item["result"] == "passed" and item.get("role") == "tester" for item in checks):
+            errors.append("no passing check executed by the independent tester")
         # A reviewer re-running its own not_run check in the same generation changed no code, so it needs no new test round.
-        reviews = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "reviewer" and not reran_not_run(record, item)]
+        reviews = [item["at"] for item in review_passes(checks) if not reran_not_run(record, item)]
         tests = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "tester"]
         if reviews and tests and max(tests) <= max(reviews):
             errors.append("independent tester check must be recorded after the latest passing reviewer check")

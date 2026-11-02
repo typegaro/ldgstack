@@ -45,11 +45,14 @@ Worktree mode (`implementation/workspace.json`), local PRs, CI, and the queues a
 
 ```bash
 tracker pr open 0000-project-bootstrap --completed "..." --remaining "..."   # implementer/fixer: commits, merge-tree vs main, PR checks, ci.fast, then -> reviewer
+tracker pr open 0000-project-bootstrap --completed "..." --remaining "..." --light "test-only fix"   # fixer, low bugs, small safe diff: -> tester
+tracker handoff 0000-project-bootstrap --to tester --completed "..." --remaining "..." --light "..."   # the same without a ci section
 tracker pr status [0000-project-bootstrap]                # re-checks open PRs against main; --json: prs[] with repos, fast_ci, review_rounds, queue
 tracker pr return 0000-project-bootstrap --parent-confirmed   # a PR that now conflicts goes to the fixer with an assigned bug
 tracker ci run 0000-project-bootstrap [--tier full] [--parent-confirmed]   # records ci-<tier>; log under implementation/ci/<feature>/
 tracker queue status                                      # --json: queues.{review,test,merge}.{slots,holders,waiting}, merge.last, agents
 tracker queue wait test [--feature 0000-project-bootstrap] [--timeout 2h]   # polls every 2 s; exits 0 with the item once it has a slot
+tracker queue hold test --feature 0000-project-bootstrap --class stack --run "make e2e"   # a writer's stack run takes a test slot
 tracker queue add merge 0000-project-bootstrap --parent-confirmed   # after gate acceptance; add test F --class browser --priority 1 also works
 tracker queue run merge --parent-confirmed                # one item: merge main in, ci.fast + pre_merge, ff main, archive, re-check PRs, post_merge
 tracker assign 0000-project-bootstrap --role tester --read-only --slot-class browser --parent-confirmed

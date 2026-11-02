@@ -7,6 +7,7 @@ items are added by the parent after the acceptance gate."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -156,7 +157,11 @@ def sync(root: Path, config: Record, records: list[Record] | None = None) -> Rec
             if item["class"] not in slots:
                 item["class"] = "default" if "default" in slots else next(iter(slots))
             expire(item, config, moment)
-        used = {name: sum(item["state"] in TAKEN and item["class"] == name for item in items) for name in slots}
+        holds = [hold for hold in state["queues"][queue].get("holds", []) if live(hold, config, moment)]
+        if holds or "holds" in state["queues"][queue]:
+            state["queues"][queue]["holds"] = holds
+        used = {name: sum(item["state"] in TAKEN and item["class"] == name for item in items) + sum(hold["class"] == name for hold in holds)
+                for name in slots}
         for item in ordered(items):
             blocked = (found[item["feature"]].get("pr") or {}).get("blocking") if queue != "merge" else None
             if item["state"] == "waiting" and not blocked and used[item["class"]] < slots[item["class"]]:
@@ -165,6 +170,26 @@ def sync(root: Path, config: Record, records: list[Record] | None = None) -> Rec
     if json.dumps(state, sort_keys=True) != before:
         save(root, state)
     return state
+
+
+def live(hold: Record, config: Record, moment: datetime) -> bool:
+    """A `queue hold` slot lasts while its process runs, at most one lease."""
+    if (moment - parse(hold["since"])).total_seconds() >= config["lease"]:
+        return False
+    try:
+        os.kill(int(hold["pid"]), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        pass  # alive under another user, or no pid: the lease decides
+    return True
+
+
+def free(state: Record, config: Record, queue: str, queue_class: str) -> bool:
+    """Whether a slot of the class is free for a hold (granted items and other holds count as taken)."""
+    taken = sum(item["state"] in TAKEN and item["class"] == queue_class for item in state["queues"][queue]["items"])
+    taken += sum(hold["class"] == queue_class for hold in state["queues"][queue].get("holds", []))
+    return taken < config["slots"][queue][queue_class]
 
 
 def positions(items: list[Record]) -> dict[str, int]:
@@ -195,6 +220,8 @@ def view(state: Record, config: Record, records: list[Record], root: Path) -> Re
                        if item["feature"] in found and (found[item["feature"]].get("pr") or {}).get("blocking") and queue != "merge" else {})}
                    for item in ordered(items) if item["state"] not in TAKEN]
         queues[queue] = {"slots": dict(config["slots"][queue]), "holders": holders, "waiting": waiting}
+        if state["queues"][queue].get("holds"):
+            queues[queue]["holds"] = state["queues"][queue]["holds"]
         if queue == "merge":
             queues[queue]["last"] = state["queues"]["merge"].get("last")
     return {"queues": queues, "agents": agents(root, records)}

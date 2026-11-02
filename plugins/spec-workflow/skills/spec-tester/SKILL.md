@@ -66,6 +66,7 @@ Record each executed method with `check add` (`--result passed|failed|not_run|no
 - Runtime bugs: retest from the original reproduction steps, then the nearest affected behavior for regressions. If the parent resumed you after a fix, rerun your own reproduction; don't re-onboard.
 - Code-review findings: run the fixer's regression test yourself and confirm it targets the defect. Where the defect has observable runtime behavior, also exercise it.
 - `bug verify` only when you observe the required behavior yourself; otherwise `bug reopen` with new evidence.
+- After a fix round every requirement needs a fresh `tested` mark. When the fix diff is narrow (the brief's `Worktree:` line names it; add `--stat`), rerun the suites that cover the changed files plus the stack E2E, and mark the untouched requirements tested citing that run and the diff; retest everything when the diff is broad or touches shared code.
 - `closed_not_a_bug` is a decision for the parent and user. Propose it in your report.
 
 ## Handoff

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tracker import brief as briefs
-from tracker import ci, deps, queues, toolkit
+from tracker import ci, deps, fixround, queues, toolkit
 from tracker import paths as lanes
 from tracker import plan as plans
 from tracker import requirements as spec_requirements
@@ -23,7 +24,7 @@ from tracker.model import (
     BUG_TRANSITIONS, CHECK_RESULTS, HANDOFFS, RISK_TIERS, ROLES, SEVERITIES,
     bump_generation, find_item, gate_errors, generation, generation_has_work, invalidate_item, latest_checks, next_id, not_run_checks, now,
     open_blockers, open_questions, open_tool_gaps, parent_attested, parent_status, require_confirmation, require_role,
-    review_skip_errors, spec_matches, touch,
+    review_passes, review_skip_errors, spec_matches, touch,
 )
 from tracker.store import (
     TrackerError, digest, feature_name, find_root, load, load_all, project_lock, record_path, remove, save, spec_path, write_atomic,
@@ -170,6 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("--user-decision", help="to implementer before depends_on/amends are accepted (the user's words)")
     handoff.add_argument("--question", help="--to parent: ask the parent instead of improvising; sets needs_answer")
     handoff.add_argument("--reason", help="with --parent-confirmed: why the implementer may start without a plan")
+    handoff.add_argument("--light", metavar="REASON", help="fixer -> tester without a fresh review: only low bugs, a small or "
+                                                          "test/config/docs-only diff, nothing sensitive (worktree mode)")
 
     plan = group(commands, "plan")
     plan_add = command(plan, "add", confirmed=True, help="store a plan (planner, or parent) from a file or - for stdin")
@@ -235,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     opened.add_argument("--completed", required=True)
     opened.add_argument("--remaining", required=True)
     opened.add_argument("--checks-not-run", default="None")
+    opened.add_argument("--light", metavar="REASON", help="a fixer's light round: straight to retest (see `handoff --light`)")
     shown = prs.add_parser("status", help="open PRs re-checked against current main (conflicts, PR checks), fast CI, queue place")
     shown.add_argument("feature", nargs="?")
     shown.add_argument("--json", dest="json_after", action="store_true")
@@ -251,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("queue", choices=QUEUES)
     wait.add_argument("--feature", help="default: the next granted item nobody has claimed yet")
     wait.add_argument("--timeout", metavar="D", help="give up after D (seconds, or 30m, 2h); default: wait forever")
+    held = queue.add_parser("hold", help="take a slot of a class while a command runs (an executor's stack E2E), then free it")
+    held.add_argument("queue", choices=("review", "test"))
+    held.add_argument("--feature", required=True)
+    held.add_argument("--class", dest="slot_class", help="resource class from workspace.json slots (default: the queue's first)")
+    held.add_argument("--run", required=True, metavar="COMMAND", help="shell command, run from the current directory")
+    held.add_argument("--timeout", metavar="D", help="give up waiting after D; default: wait forever")
     added = queue.add_parser("add", help="add a record to a queue (merge: after gate acceptance), or set its class or priority")
     added.add_argument("queue", choices=QUEUES)
     added.add_argument("feature")
@@ -658,6 +668,7 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
             item.update(status="assigned", assigned_fixer=args.fixer)
         elif args.action == "fixed":
             item.update(status="fixed", fix=args.fix, regression=args.regression)
+            item.pop("restore", None)
         elif args.action == "verify":
             item.update(status="verified", retest=args.retest)
         elif args.action == "reopen":
@@ -672,6 +683,10 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
         else:
             require_confirmation(args.parent_confirmed, "closing a bug as not a bug")
             item.update(status="closed_not_a_bug", retest=args.reason, user_decision=args.user_decision)
+            if item.get("restore"):
+                result["restored"] = restore_flake(root, record, item)
+
+    result: Record = {}
 
     if args.action == "add":
         if args.parent_confirmed:
@@ -681,7 +696,32 @@ def bug(root: Path, args: argparse.Namespace) -> Record:
         if args.found_by:
             raise TrackerError("--found-by goes with --parent-confirmed; a reviewer or tester is recorded as the finder automatically")
         return edit(root, args.feature, {"reviewer", "tester"}, add)
-    return edit(root, args.feature, {BUG_TRANSITIONS[args.action][0]}, transition)
+    return {**edit(root, args.feature, {BUG_TRANSITIONS[args.action][0]}, transition), **result}
+
+
+def restore_flake(root: Path, record: Record, item: Record) -> str:
+    """A merge-queue CI failure closed as not a bug (a flake): while nobody touched the branch since, the record goes back
+    to the generation, marks, and parent that passed review and test, so the merge queue can run it again."""
+    snapshot = item.pop("restore")
+    tree, config = record["worktree"], workspace_config(root)
+    feature = record["feature"]
+    if any(int(check.get("generation", 1)) > snapshot["generation"] for check in record["checks"]):
+        return "no: checks were recorded after the merge queue returned it; it goes through review and test again"
+    if ci.heads(root, config, tree["repos"], tree["branch"]) != snapshot["branch_shas"]:
+        return f"no: {tree['branch']} changed after the merge queue returned it; it goes through review and test again"
+    if generation(record) != snapshot["generation"]:
+        record.setdefault("generation_history", []).append(
+            {"from": generation(record), "to": snapshot["generation"], "reason": f"{item['id']} closed as not a bug: restored", "at": now()})
+    record.update(generation=snapshot["generation"], requirements=snapshot["requirements"], current_role="parent")
+    record.pop("fix_round", None)
+    for lane in record.get("assignments", []):
+        if lane["status"] == "active":
+            lane.update(status="released", released_at=now(), released_by="restore")
+    record["status"] = parent_status(root, record)
+    record["handoff"] = {"from": "parent", "completed": f"{item['id']} closed as not a bug", "remaining": "re-run fast CI, then merge",
+                         "checks_not_run": "", "next_role": "parent"}
+    return (f"yes: generation {snapshot['generation']} restored with its review and test; run `tracker ci run {feature} --parent-confirmed`, "
+            f"then `tracker queue add merge {feature} --parent-confirmed`")
 
 
 def blocker(root: Path, args: argparse.Namespace) -> Record:
@@ -837,7 +877,10 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
         source, target = record["current_role"], args.to
         first_look = source == target == "parent" and record["status"] == "new"  # old flow: init, then handoff --to parent
         replan = (source, target) == ("implementer", "planner") and args.parent_confirmed and not any(item["implemented"] for item in record["requirements"])
-        if target not in HANDOFFS[source] and not first_look and not replan:
+        light = getattr(args, "light", None)
+        if light and (source, target) != ("fixer", "tester"):
+            raise TrackerError("--light sends a fixer's round straight to the tester: `handoff --to tester --light \"...\"` as the fixer")
+        if target not in HANDOFFS[source] and not first_look and not replan and not light:
             raise TrackerError(f"{source} cannot hand off to {target}; allowed: {', '.join(sorted(HANDOFFS[source]))}")
         if args.question:
             ask(record, args)
@@ -847,10 +890,19 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                                f"`tracker join {record['feature']} --completed \"...\"` first (joined before review and retest)")
         if source == "planner" and not plans.latest(record):
             raise TrackerError(f"no plan stored; run `tracker plan add {record['feature']} --from - <<'PLAN' ... PLAN` first")
-        if (target == "reviewer" and source in {"implementer", "fixer"} and record.get("worktree") and config and config["ci"]
+        if ((target == "reviewer" or light) and source in {"implementer", "fixer"} and record.get("worktree") and config and config["ci"]
                 and not getattr(args, "via_pr", False)):
             raise TrackerError(f"worktree mode with ci: a writer opens a PR instead (conflict check and fast CI, then the reviewer): "
-                               f"`tracker pr open {record['feature']} --completed \"...\" --remaining \"...\"`")
+                               f"`tracker pr open {record['feature']} --completed \"...\" --remaining \"...\"{' --light \"...\"' if light else ''}`")
+        if light:
+            errors, measured = fixround.light_errors(root, config, record)
+            if errors:
+                raise TrackerError("this fix needs a fresh review (hand off to the reviewer): " + "; ".join(errors))
+            record["checks"].append({
+                "name": "rereview-skipped", "method": "tracker handoff --light", "result": "passed", "role": "fixer",
+                "evidence": f"{light}. Fix diff: {measured['lines']} lines in {', '.join(measured['files']) or 'no files'}; "
+                            f"low bugs {', '.join(measured['bugs'])}", "generation": generation(record), "at": now(), "light": measured,
+            })
         review_skipped = source == "implementer" and target == "tester"
         if review_skipped:
             skip_errors = review_skip_errors(record)
@@ -859,9 +911,7 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
         gaps = [item["id"] for item in open_tool_gaps(record)]
         if target == "tester" and gaps:
             raise TrackerError(f"open tool gaps: {', '.join(gaps)}; hand off to parent to dispatch the toolsmith")
-        if target == "tester" and not review_skipped and not any(
-            item["result"] == "passed" and item.get("role") == "reviewer" for item in latest_checks(record)
-        ):
+        if target == "tester" and not review_skipped and not review_passes(latest_checks(record)):
             raise TrackerError("tester handoff requires a passing reviewer check in the current implementation generation")
         if target in {"reviewer", "tester"}:
             if source in {"fixer", "reviewer"} and any(item["status"] in {"open", "assigned"} for item in record["bugs"]):
@@ -880,6 +930,7 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                 raise TrackerError("no assigned bugs for fixer")
             if generation_has_work(record):
                 bump_generation(record, "fixer started a code revision")
+            fixround.start(root, config, record)
             record["status"] = "fixing"
         elif target == "implementer":
             start_guard(root, record, args.parent_confirmed, args.user_decision, "handoff")
@@ -963,12 +1014,17 @@ def plan_command(root: Path, args: argparse.Namespace) -> Any:
             raise TrackerError(f"no plan version {args.version}; versions: {', '.join(str(item['version']) for item in stored)}")
         return plans.brief_text(chosen, args.batch, f"tracker plan show {record['feature']}") + "\n"
     text = read_source(args.source)
+    config = workspace_config(root, required=False)
     result: Record = {}
 
     def change(record: Record) -> None:
         if record["current_role"] not in {"planner", "parent"}:
             require_confirmation(args.parent_confirmed, f"storing a plan while the record is with the {record['current_role']}")
         parsed, warnings = plans.parse(text, [item["id"] for item in record["requirements"]])
+        if config:
+            added = plans.registry_paths(config["registries"], parsed["ownership"])
+            parsed["ownership"] += added
+            result.update(registries=added) if added else None
         stored = record.setdefault("plans", [])
         version = len(stored) + 1
         stored.append({"version": version, "generation": generation(record), "added_by": record["current_role"], "at": now(), **parsed})
@@ -1239,12 +1295,7 @@ def assign(root: Path, args: argparse.Namespace) -> Record:
             globs = list(latest_plan["ownership"])
             if args.batch and args.role == "implementer":
                 # #73: a batch lane holds only the batch's files, so disjoint batches can run as --parallel executors.
-                lane = plans.batch_lane(latest_plan, args.batch)
-                if lane:
-                    globs = lane
-                else:
-                    print(f"warning: plan batch {args.batch} names no paths inside the ownership; assigned the whole ownership. "
-                          "List the batch's files under **Files:**.", file=sys.stderr)
+                globs = batch_lane(root, latest_plan, args.batch)
             if args.role == "implementer":
                 record = load(root, args.feature)
                 override = early_gate(root, record, plan_batches(record, args.batch, False), args.parent_confirmed, args.user_decision, "assign")
@@ -1391,6 +1442,23 @@ def claim_assignment(root: Path, args: argparse.Namespace) -> Record:
     raise TrackerError(f"unknown or released assignment {args.assignment}; ask the parent for a fresh brief")
 
 
+def batch_lane(root: Path, plan: Record, number: int) -> list[str]:
+    """A batch's lane plus the registry files it needs; the whole ownership when the batch names no paths."""
+    lane = plans.batch_lane(plan, number)
+    if not lane:
+        print(f"warning: plan batch {number} names no paths inside the ownership; assigned the whole ownership. "
+              "List the batch's files under **Files:**.", file=sys.stderr)
+        return list(plan["ownership"])
+    config = workspace_config(root, required=False)
+    return lane + plans.registry_paths(config["registries"], lane) if config else lane
+
+
+def next_batch(record: Record, number: int | None) -> bool:
+    """Whether the one executor lane belongs to another plan batch, so batch `number` needs its own lane (#86)."""
+    active = [item for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer"]
+    return number is not None and len(active) == 1 and active[0].get("batch") not in (None, number)
+
+
 def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief --fresh") -> None:
     """A fresh agent (e.g. the next batch's executor) gets its own assignment: same paths, new ID to claim."""
     def change(record: Record) -> None:
@@ -1406,9 +1474,12 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
                 raise TrackerError(f"no lane for batch {number} among the parallel lanes; `spec-tracker assign {record['feature']} "
                                    f"--role implementer --from-plan --batch {number} --parallel --parent-confirmed` first")
             active = mine or active
-        latest_plan = plans.latest(record)
+        latest_plan = plans.latest(record, any_generation=True)
         carved: list[Record] = []
-        if active:
+        new_batch = latest_plan is not None and next_batch(record, number)
+        if new_batch:
+            paths = batch_lane(root, latest_plan, number)
+        elif active:
             paths = list(active[-1]["paths"])
             live = {item["id"] for item in lanes.active_assignments(root)}
             carved = [entry for entry in active[-1].get("carved", []) if entry["to"] in live]
@@ -1423,13 +1494,14 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
         tree = record.get("worktree")
         items.append({"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": args.role, "paths": paths, "status": "active", "at": now(), "fresh": True,
                       **({"carved": carved} if carved else {}), **({"branch": tree["branch"]} if tree else {}),
-                      **({"batch": number} if number is not None and any(item.get("batch") == number for item in active) else {})})
+                      **({"batch": number} if number is not None and (new_batch or any(item.get("batch") == number for item in active)) else {})})
 
     edit(root, args.feature, set(ROLES), change)
 
 
 def brief(root: Path, args: argparse.Namespace) -> str:
     record = load(root, args.feature)
+    number = None
     if args.role == "implementer":
         number = briefs.plan_batch(record, args.batch)
         override = early_gate(root, record, plan_batches(record, number, True), args.parent_confirmed, args.user_decision, "brief")
@@ -1437,8 +1509,8 @@ def brief(root: Path, args: argparse.Namespace) -> str:
             edit(root, args.feature, set(ROLES), lambda item: item.setdefault("dependency_overrides", []).append(override))
     if args.role in queues.ROLE_QUEUE:
         queue_slot(root, record, args)
-    if args.fresh:
-        fresh_assignment(root, args)
+    if args.fresh or (args.role == "implementer" and args.role == record["current_role"] and next_batch(record, number)):
+        fresh_assignment(root, args, "brief --fresh" if args.fresh else f"brief: batch {number}")
     elif args.role in (record["current_role"], record.get("side_role")):
         # Every brief starts a new agent (a resumed agent keeps its claim), so a claimed assignment is reissued (#46, #63).
         own = briefs.assignment_for(record, args.role, "spec-tracker", args.batch) if any(
@@ -1653,7 +1725,8 @@ def recheck(root: Path, config: Record) -> list[Record]:
     return flagged
 
 
-def ci_round(root: Path, feature: str, roles: set[str], tier: str, prepare: Callable[[Record, Record, Record], None] | None = None) -> tuple[Record, Record | None]:
+def ci_round(root: Path, feature: str, roles: set[str], tier: str, prepare: Callable[[Record, Record, Record], None] | None = None,
+             retries: int = 0) -> tuple[Record, Record | None]:
     """Run a CI tier outside the project lock (it may take minutes), then record it as check `ci-<tier>` on the record.
     Refuses when the record changed role or the branch moved meanwhile."""
     with project_lock(root):
@@ -1666,7 +1739,7 @@ def ci_round(root: Path, feature: str, roles: set[str], tier: str, prepare: Call
             return record, None
         before = ci.heads(root, config, tree["repos"], tree["branch"])
         edit(root, feature, set(ROLES), lambda item: item.setdefault("pr", {}).update(ci_running={"tier": tier, "at": now()}))
-    result = ci.run(root, config, record["feature"], tree["branch"], tree["repos"], tier, now())
+    result = ci.run(root, config, record["feature"], tree["branch"], tree["repos"], tier, now(), retries)
     with project_lock(root):
         record = load(root, feature)
         record.get("pr", {}).pop("ci_running", None)
@@ -1716,9 +1789,9 @@ def pr_open(root: Path, args: argparse.Namespace) -> Record:
     with project_lock(root):
         config, tree = spec_tree(root, record)
         source = record["current_role"]
-        summary_ = handoff(root, argparse.Namespace(feature=args.feature, to="reviewer", completed=args.completed, remaining=args.remaining,
-                                                    checks_not_run=args.checks_not_run, user_decision=None, question=None, reason=None,
-                                                    parent_confirmed=False, via_pr=True))
+        summary_ = handoff(root, argparse.Namespace(feature=args.feature, to="tester" if args.light else "reviewer", completed=args.completed,
+                                                    remaining=args.remaining, checks_not_run=args.checks_not_run, user_decision=None,
+                                                    question=None, reason=None, parent_confirmed=False, via_pr=True, light=args.light))
 
         def opened(item: Record) -> None:
             pr = item.setdefault("pr", {})
@@ -1790,6 +1863,8 @@ def pr_command(root: Path, args: argparse.Namespace) -> Any:
 def return_to_fixer(root: Path, feature: str, title: str, evidence: str, rereview: bool) -> Record:
     """Merge queue and conflict re-check: the record goes to the fixer with an assigned bug (the parent then assigns the
     fixer's lane and briefs it). An agent's merge resolution also needs a fresh focused review before it merges."""
+    config = workspace_config(root)
+
     def change(record: Record) -> None:
         tree = record["worktree"]
         bugs = record["bugs"]
@@ -1798,8 +1873,13 @@ def return_to_fixer(root: Path, feature: str, title: str, evidence: str, rerevie
                      "reproduction": f"merge main into {tree['branch']} in {', '.join(tree['repos'])} and run the fast CI tier",
                      "expected": "merges cleanly and passes the fast CI tier", "actual": title, "evidence": evidence,
                      "assigned_fixer": "fixer", "fix": "", "regression": "", "retest": ""})
+        if not rereview:
+            # A CI failure may be a flake: closing the bug as not a bug restores this snapshot while the branch is unchanged.
+            bugs[-1]["restore"] = {"generation": generation(record), "requirements": json.loads(json.dumps(record["requirements"])),
+                                   "status": record["status"], "branch_shas": ci.heads(root, config, tree["repos"], tree["branch"])}
         if generation_has_work(record):
             bump_generation(record, f"merge queue: {title}")
+        fixround.start(root, config, record)
         for item in record.get("assignments", []):
             if item["status"] == "active":
                 item.update(status="released", released_at=now(), released_by="merge-queue")
@@ -1862,6 +1942,39 @@ def queue_wait(root: Path, config: Record, args: argparse.Namespace) -> Record:
         time.sleep(WAIT_POLL)
 
 
+def queue_hold(root: Path, config: Record, args: argparse.Namespace) -> Record:
+    """Writers are in no queue, so a writer's run of a shared resource (the stack) holds a slot like a tester would."""
+    queue_class = args.slot_class or workspace.default_class(config, args.queue)
+    if queue_class not in config["slots"][args.queue]:
+        raise TrackerError(f"unknown {args.queue} class {queue_class}; {workspace.CONFIG} slots: {', '.join(config['slots'][args.queue])}")
+    load(root, args.feature)
+    limit = wait_time(args.timeout)
+    deadline = None if limit is None else time.monotonic() + limit
+    hold = {"feature": args.feature, "class": queue_class, "pid": os.getpid(), "command": args.run}
+    while True:
+        with project_lock(root):
+            state = queues.sync(root, config)
+            if queues.free(state, config, args.queue, queue_class):
+                state["queues"][args.queue].setdefault("holds", []).append({**hold, "since": now()})
+                queues.save(root, state)
+                break
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TrackerError(f"timed out after {args.timeout} waiting for a {args.queue} {queue_class} slot")
+        time.sleep(WAIT_POLL)
+    started = time.monotonic()
+    try:
+        code = subprocess.run(args.run, shell=True, stdout=sys.stderr, check=False).returncode
+    finally:
+        with project_lock(root):
+            state = queues.load(root)
+            state["queues"][args.queue]["holds"] = [item for item in state["queues"][args.queue].get("holds", []) if item["pid"] != hold["pid"]]
+            queues.save(root, state)
+            queues.sync(root, config)
+    if code:
+        raise TrackerError(f"`{args.run}` exited {code} (the {args.queue} {queue_class} slot is free again)")
+    return {"queue": args.queue, "class": queue_class, "command": args.run, "exit": 0, "seconds": round(time.monotonic() - started, 1)}
+
+
 def queue_command(root: Path, args: argparse.Namespace) -> Any:
     config = workspace_config(root)
     assert config is not None
@@ -1869,6 +1982,8 @@ def queue_command(root: Path, args: argparse.Namespace) -> Any:
         return queue_wait(root, config, args)
     if args.action == "run":
         return merge_run(root, config, args)
+    if args.action == "hold":
+        return queue_hold(root, config, args)
     with project_lock(root):
         if args.action == "status":
             state = queues.sync(root, config)
@@ -1958,7 +2073,7 @@ def merge_run(root: Path, config: Record, args: argparse.Namespace) -> Record:
         head.update(state="running", started_at=now())
         queues.save(root, state)
     try:
-        record, result = ci_round(root, feature, {"parent"}, "fast")
+        record, result = ci_round(root, feature, {"parent"}, "fast", retries=ci.MERGE_RETRIES)
     except (TrackerError, workspace.WorkspaceError):
         with project_lock(root):
             state = queues.load(root)
@@ -1995,7 +2110,8 @@ def merge_run(root: Path, config: Record, args: argparse.Namespace) -> Record:
         flagged = recheck(root, config)
         queues.sync(root, config)
     post = ci.run_hooks(root, config, "post_merge", feature, None)
-    return {"feature": feature, "result": "merged", "removed_worktrees": archived.get("removed_worktrees", []), "spec_archive": spec_archived,
+    flaky = [item for item in (result or {}).get("commands", []) if item.get("flaky")]
+    return {"feature": feature, "result": "merged", **({"flaky": flaky} if flaky else {}), "removed_worktrees": archived.get("removed_worktrees", []), "spec_archive": spec_archived,
             "pre_merge": hooks, "post_merge": post, "conflicting_prs": flagged, "queue_next": next_merge(root, config)}
 
 

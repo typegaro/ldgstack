@@ -99,6 +99,12 @@ def parse(text: str, requirement_ids: list[str]) -> tuple[dict[str, Any], list[s
         raise TrackerError("plan ownership lists no globs; write one `- \\`glob\\`` bullet per owned path")
     covered = {rid for item in batches for rid in item["requirements"]}
     warnings = [f"requirements in no batch: {', '.join(rid for rid in requirement_ids if rid not in covered)}"] if known - covered else []
+    # A batch's **Files:** are part of the plan's ownership, so its lane never drops one (#86).
+    for item in batches:
+        outside = [path for path in listed_files(item["text"]) or [] if not owned(ownership, path)]
+        if outside:
+            ownership += outside
+            warnings.append(f"batch {item['number']} **Files:** outside Ownership, added to it: {', '.join(outside)}")
     common = {key: next((body for heading, body in parts if kind(heading) == key), "") for key in ("ownership", "findings", "stop", "out")}
     return {"ownership": ownership, "batches": batches, "sections": common, "text": text}, warnings
 
@@ -142,20 +148,39 @@ PATH = re.compile(r"(?<![\w/.:-])((?:[\w.-]+/)+[\w.*-]*[\w*])")
 FILES_SECTION = re.compile(r"\*\*Files:\*\*(.*?)(?=\n\s*(?:[-*]\s*)?\*\*[A-Z][\w ]*:\*\*|\Z)", re.S)
 
 
-def batch_lane(plan: dict[str, Any], number: int) -> list[str]:
-    """The paths batch `number` edits (#73): its `**Files:**` section (else the whole batch text), backticks optional,
-    `:line` suffixes dropped, and only paths inside the plan's ownership. Empty when the batch names none."""
-    text = batch(plan, number)["text"]
-    section = FILES_SECTION.search(text)
+def paths_in(text: str) -> list[str]:
+    """Project paths named in plan text, backticks optional, `:line` suffixes dropped."""
     found = []
-    for raw in PATH.findall(section.group(1) if section else text):
-        candidate = re.sub(r":[0-9]+(?:-[0-9]+)?$", "", raw).rstrip("/")
+    for raw in PATH.findall(text):
         try:
-            candidate = lanes.validate(candidate)
+            found.append(lanes.validate(re.sub(r":[0-9]+(?:-[0-9]+)?$", "", raw).rstrip("/")))
         except ValueError:
             continue
-        if any(lanes.matches([owner], candidate) or lanes.covers(owner, candidate) for owner in plan["ownership"]):
-            found.append(candidate)
+    return list(dict.fromkeys(found))
+
+
+def listed_files(text: str) -> list[str] | None:
+    """The paths of a batch's `**Files:**` section, or None when it has none."""
+    section = FILES_SECTION.search(text)
+    return paths_in(section.group(1)) if section else None
+
+
+def owned(ownership: list[str], path: str) -> bool:
+    return any(lanes.matches([owner], path) or lanes.covers(owner, path) for owner in ownership)
+
+
+def batch_lane(plan: dict[str, Any], number: int) -> list[str]:
+    """The paths batch `number` edits (#73): its `**Files:**` section (else the paths in the whole batch text that lie
+    inside the plan's ownership). Empty when the batch names none."""
+    text = batch(plan, number)["text"]
+    listed = listed_files(text)
+    return listed if listed is not None else [path for path in paths_in(text) if owned(plan["ownership"], path)]
+
+
+def registry_paths(rules: list[dict[str, list[str]]], globs: list[str]) -> list[str]:
+    """`registries` files a lane also needs: each rule's `own` paths when the lane touches its `when` globs and does not
+    already cover them (#86: a new migration needs the migration index, a new check the check-count test)."""
+    found = [path for rule in rules if lanes.overlap(globs, rule["when"]) for path in rule["own"] if not owned(globs, path)]
     return list(dict.fromkeys(found))
 
 

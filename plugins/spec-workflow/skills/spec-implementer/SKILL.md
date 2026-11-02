@@ -80,7 +80,8 @@ When assigned as fixer:
 - Reproduce each bug from its recorded steps before changing code. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
 - Add a regression test that fails without the fix. Record `bug fixed` with the fix and that test.
 - Never verify your own fix.
-- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest.
+- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest. Exception: when every bug you fixed is low and the fix is small (or only tests, config, or docs) and touches nothing sensitive, end with `pr open --light "<why>"` (`handoff --to tester --light` without CI); the tracker measures the diff and refuses otherwise, then use the plain command.
+- A stack E2E (anything that starts the shared stack) runs inside `tracker queue hold test --feature <feature> --class stack --run "<command>"`, so it never overlaps a tester's run.
 - A merge-conflict or merge-queue CI bug: in your worktree, `git merge <main>`, resolve, rerun the focused tests, record the resolution as the fix, then `pr open`. Name the resolved files in your report: a fresh focused review checks them.
 
 ## Completion report

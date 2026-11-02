@@ -18,6 +18,8 @@ from .model import generation, latest_checks
 Record = dict[str, Any]
 CI_DIR = "implementation/ci"
 OUTPUT_TAIL = 400
+# The merge queue re-runs a failed command once: a pass is recorded as flaky instead of returning the spec to the fixer.
+MERGE_RETRIES = 1
 
 
 def names(config: Record | None) -> set[str]:
@@ -43,8 +45,9 @@ def shell(root: Path, config: Record, command: str, cwd: Path, branch: str | Non
     return code, output if isinstance(output, str) else str(output), round(time.monotonic() - started, 1)
 
 
-def run(root: Path, config: Record, feature: str, branch: str, repos: list[str], tier: str, timestamp: str) -> Record | None:
-    """Run one tier in the spec's checkouts, stopping at the first failure. None when the tier names none of `repos`."""
+def run(root: Path, config: Record, feature: str, branch: str, repos: list[str], tier: str, timestamp: str, retries: int = 0) -> Record | None:
+    """Run one tier in the spec's checkouts, stopping at the first failure (after `retries` re-runs of the failed command).
+    None when the tier names none of `repos`."""
     plan = [(repo, command) for repo in repos for command in config["ci"].get(tier, {}).get(repo, [])]
     if not plan:
         return None
@@ -57,7 +60,17 @@ def run(root: Path, config: Record, feature: str, branch: str, repos: list[str],
         for repo, command in plan:
             code, output, spent = shell(root, config, command, root / repo / branch, branch, env, config["ci_timeout"])
             stream.write(f"$ [{repo}/{branch}] {command}\n{output}\n[exit {code} in {spent}s]\n\n")
-            result["commands"].append({"repo": repo, "command": command, "exit": code, "seconds": spent})
+            entry = {"repo": repo, "command": command, "exit": code, "seconds": spent}
+            for attempt in range(retries):
+                if code == 0:
+                    break
+                failed = {"exit": code, "tail": output.strip()[-OUTPUT_TAIL:]}
+                code, output, spent = shell(root, config, command, root / repo / branch, branch, env, config["ci_timeout"])
+                stream.write(f"$ [{repo}/{branch}] {command}  (retry {attempt + 1})\n{output}\n[exit {code} in {spent}s]\n\n")
+                entry.update(exit=code, seconds=round(entry["seconds"] + spent, 1))
+                if code == 0:
+                    entry["flaky"] = failed
+            result["commands"].append(entry)
             if code != 0:
                 result.update(result="failed", failed={"repo": repo, "command": command, "exit": code, "tail": output.strip()[-OUTPUT_TAIL:]})
                 break
@@ -65,7 +78,9 @@ def run(root: Path, config: Record, feature: str, branch: str, repos: list[str],
 
 
 def check_entry(result: Record, record: Record) -> Record:
-    commands = "; ".join(f"[{item['repo']}] {item['command']} -> exit {item['exit']} ({item['seconds']}s)" for item in result["commands"])
+    commands = "; ".join(f"[{item['repo']}] {item['command']} -> exit {item['exit']} ({item['seconds']}s"
+                         f"{', flaky: exit ' + str(item['flaky']['exit']) + ' then passed on retry' if item.get('flaky') else ''})"
+                         for item in result["commands"])
     shas = ", ".join(f"{repo} {sha[:12]} on main {result['main_shas'][repo][:12]}" for repo, sha in result["branch_shas"].items())
     return {"name": f"ci-{result['tier']}", "method": f"tracker ci ({result['tier']} tier in {', '.join(result['branch_shas'])})",
             "result": result["result"], "evidence": f"{commands}. Branch {shas}. Log: {result['log']}", "role": record["current_role"],
