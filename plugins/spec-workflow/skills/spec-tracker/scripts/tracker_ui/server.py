@@ -411,6 +411,62 @@ def build_specs(project: Project) -> dict[str, Any]:
 
 
 REQUIREMENT_LINE = re.compile(r"\*\*(R\d+)\*\*")
+REQUIREMENT_BULLET = re.compile(r"^\s*[-*]\s+\*\*(R\d+)\*\*", re.M)
+BACKLOG_GROUPS = ("ready", "waiting", "planned", "deferred", "decisions")
+
+
+def requirement_count(project: Project, spec: dict[str, Any]) -> int:
+    try:
+        return len(set(REQUIREMENT_BULLET.findall((project.root / str(spec.get("path", ""))).read_text(encoding="utf-8"))))
+    except OSError:
+        return 0
+
+
+def build_backlog(project: Project) -> dict[str, Any]:
+    """Specs no agent has started: ready, waiting on unfinished specs, planned ahead (record and plan, no code yet), deferred,
+    and decision specs still to accept."""
+    def build() -> dict[str, Any]:
+        records = project.records()
+        specs = {spec["id"]: spec for spec in project.specs()}
+        stages = {row["id"]: row["stage"] for row in build_specs(project)["specs"]}
+        numbers, _ = wave_numbers(project)
+        deferrals: dict[str, dict[str, Any]] = {}
+        for item in project.spec_archive().get("history", []):
+            if item.get("action") == "defer":
+                deferrals[str(item.get("specification"))] = item
+            elif item.get("action") == "undefer":
+                deferrals.pop(str(item.get("specification")), None)
+        groups: dict[str, list[dict[str, Any]]] = {group: [] for group in BACKLOG_GROUPS}
+        for spec in specs.values():
+            if spec["status"] in {"accepted", "superseded"}:
+                continue
+            entry = records.get(spec["feature"])
+            record = entry["record"] if entry and entry["location"] == "active" else None
+            if record is not None and (stages.get(spec["id"]) != "planning" or any(item.get("implemented") for item in record.get("requirements", []))):
+                continue  # work has started: it is a pull request
+            unfinished = [target for target in [*spec.get("depends_on", []), *spec.get("amends", [])]
+                          if specs.get(target, {}).get("status") not in {"accepted", "superseded"}]
+            row = {"id": spec["id"], "feature": spec["feature"], "title": spec["title"], "kind": spec["kind"], "created": spec.get("created", ""),
+                   "requirements": requirement_count(project, spec), "wave": numbers.get(spec["id"]),
+                   "planned": bool(record and record.get("plans")),
+                   "waiting_on": [{"id": target, "title": specs.get(target, {}).get("title", ""), "stage": stages.get(target, "draft")}
+                                  for target in unfinished]}
+            if spec["status"] == "deferred":
+                deferral = deferrals.get(spec["name"], {})
+                groups["deferred"].append({**row, "reason": deferral.get("reason", ""), "deferred_at": deferral.get("at", "")})
+            elif spec["kind"] == "decision":
+                groups["decisions"].append(row)
+            elif record is not None:
+                groups["planned"].append(row)
+            elif unfinished:
+                groups["waiting"].append(row)
+            else:
+                groups["ready"].append(row)
+        for rows in groups.values():
+            rows.sort(key=lambda row: (row["wave"] or 999, row["id"]))
+        counts = {group: len(rows) for group, rows in groups.items()}
+        return {"groups": groups, "counts": counts, "todo": counts["ready"] + counts["waiting"] + counts["planned"]}
+    return project.cached("backlog_view", build)
 AMENDS = re.compile(r"\(amends ([^)]*)\)")
 
 
@@ -709,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         name = parts[1] if len(parts) > 1 else ""
         if len(parts) == 2:
-            static = {"prs": build_prs, "queues": build_queues, "specs": build_specs, "activity": build_activity}
+            static = {"prs": build_prs, "queues": build_queues, "specs": build_specs, "activity": build_activity, "backlog": build_backlog}
             if name in static:
                 self.send_json(static[name](project))
             elif name == "meta":

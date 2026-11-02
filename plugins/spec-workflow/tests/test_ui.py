@@ -78,6 +78,20 @@ class DashboardTest(CliTestCase):
         second = next(row for row in data["specs"] if row["id"] == 1)
         self.assertEqual(second["depends_on"], [0])
 
+    def test_backlog_lists_specs_nobody_started(self) -> None:
+        self.write_spec("0002-third.md", spec_text(2, "third", body="# Third\n\n- **R1** One.\n- **R2** Two.\n"))
+        self.write_spec("0003-risk.md", spec_text(3, "risk", kind="decision", body="# Risk\n\nAccepted.\n"))
+        self.write_spec("0004-later.md", spec_text(4, "later"))
+        self.spec("defer", "4", "--reason", "not this quarter", "--parent-confirmed")
+        data = self.get("/api/backlog")
+        ids = {group: [row["id"] for row in rows] for group, rows in data["groups"].items()}
+        self.assertEqual(ids, {"ready": [2], "waiting": [1], "planned": [], "deferred": [4], "decisions": [3]})
+        self.assertEqual(data["todo"], 2)
+        waiting = data["groups"]["waiting"][0]
+        self.assertEqual([(dep["id"], dep["stage"]) for dep in waiting["waiting_on"]], [(0, "implementing")])
+        self.assertEqual(data["groups"]["ready"][0]["requirements"], 2)
+        self.assertEqual(data["groups"]["deferred"][0]["reason"], "not this quarter")
+
     def test_spec_reader_data(self) -> None:
         data = self.get("/api/spec/0001")
         self.assertEqual(data["spec"]["feature"], "0001-second")

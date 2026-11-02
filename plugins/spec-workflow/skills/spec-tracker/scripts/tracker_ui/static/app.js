@@ -10,7 +10,7 @@ const STAGE_PILL = { implementing: "impl", planning: "plan", review: "review", t
 const STAGE_LABEL = Object.fromEntries(STAGES);
 const EVENT_ICONS = { created: "P", plan: "◇", work: "▲", check_pass: "✓", check_fail: "!", check_other: "○", question: "?", answer: "A", generation: "↻", merge: "⇢", spec: "S" };
 
-const store = { meta: null, prs: null, queues: null, specs: null };
+const store = { meta: null, prs: null, queues: null, specs: null, backlog: null };
 const view = { prState: "open", prFilter: "", prStatus: "", prArea: "", stage: "all", kind: "all", tab: "", token: 0, live: false, pending: false };
 
 // DOM helpers ---------------------------------------------------------------------------------------------
@@ -95,8 +95,9 @@ async function api(path) {
 }
 
 async function loadBase() {
-  const [meta, prs, queues, specs] = await Promise.all([api("/api/meta"), api("/api/prs"), api("/api/queues"), api("/api/specs")]);
-  Object.assign(store, { meta, prs, queues, specs });
+  const [meta, prs, queues, specs, backlog] = await Promise.all([api("/api/meta"), api("/api/prs"), api("/api/queues"), api("/api/specs"),
+    api("/api/backlog")]);
+  Object.assign(store, { meta, prs, queues, specs, backlog });
 }
 
 const prList = () => (store.prs ? store.prs.prs : []);
@@ -160,6 +161,7 @@ function renderNav(route) {
   const agents = store.queues ? store.queues.agents.length : 0;
   const items = [
     ["pulls", "#/pulls", ["Pull requests", "PRs"], store.prs ? openPrs().length : null],
+    ["backlog", "#/backlog", "Backlog", store.backlog ? store.backlog.todo : null],
     ["queues", "#/queues", "Queues", store.queues ? agents : null],
     ["specs", "#/specs", "Specs", store.specs ? store.specs.specs.length : null],
     ["activity", "#/activity", "Activity", null],
@@ -218,6 +220,7 @@ async function render(options = {}) {
     if (route.name === "pull" && route.arg) content = await pullView(route.arg);
     else if (route.name === "spec" && route.arg) content = await specView(route.arg);
     else if (route.name === "queues") content = queuesView();
+    else if (route.name === "backlog") content = backlogView();
     else if (route.name === "specs") content = specsView();
     else if (route.name === "activity") content = await activityView();
     else content = pullsView();
@@ -300,7 +303,9 @@ function pullsParts(prs, redraw) {
     list.replaceChildren(...(rows.length ? rows.map(prRow) : [emptyBox(view.prState === "open" ? "No open pull requests." : "No merged pull requests.")]));
   }
   updateList();
-  const note = h("p", { class: "meta", text: "Updates live from implementation/ and the git worktrees. Read-only: actions stay in the CLI." });
+  const todo = store.backlog ? store.backlog.todo : 0;
+  const note = h("p", { class: "meta" }, "Updates live from implementation/ and the git worktrees. Read-only: actions stay in the CLI.",
+    todo ? [" ", link("#/backlog", `${todo} spec${todo === 1 ? "" : "s"} not started yet →`)] : null);
   const banner = store.prs && !store.prs.pr_status_available
     ? h("p", { class: "banner", text: "Pull request data comes from the implementation records (no `pr status` command in this tracker yet), so branch diff stats and fast-CI results are not shown." })
     : null;
@@ -554,6 +559,42 @@ function specsParts(redraw) {
       h("td", { class: "meta" }, s.depends_on.length ? s.depends_on.map((d, i) => [i ? ", " : "", link("#/spec/" + d, specLabel(d))]) : "—"),
       h("td", { class: "meta", text: s.wave || "—" }), h("td", { class: "meta", text: shortDate(s.updated) })))))) : emptyBox("No specs match."));
   return [pipeline, kindBar, table];
+}
+
+// Backlog --------------------------------------------------------------------------------------------------
+
+const BACKLOG = [
+  ["ready", "Ready to start", "Every dependency is accepted; the orchestrator can pick these up next.", "ready"],
+  ["waiting", "Waiting on other specs", "Starts once the specs it depends on or amends are accepted.", "draft"],
+  ["planned", "Planned, not started", "A record and plan exist, but no code work has begun.", "plan"],
+  ["deferred", "Deferred", "Parked on purpose; spec undefer brings it back.", "deferred"],
+  ["decisions", "Decisions to accept", "Accepted-risk specs: recorded, never implemented.", "draft"],
+];
+
+function backlogView() {
+  const data = store.backlog;
+  const sections = BACKLOG.filter(([key]) => data.groups[key].length).map(([key, title, help, pill]) =>
+    h("section", { class: "box", "aria-labelledby": "bl-" + key },
+      h("div", { class: "box-head" }, h("strong", { id: "bl-" + key, text: title }), lbl(String(data.groups[key].length)), span("meta", help)),
+      data.groups[key].map((spec) => backlogRow(spec, pill))));
+  const total = BACKLOG.reduce((n, [key]) => n + data.groups[key].length, 0);
+  const summary = h("p", { class: "meta" }, `${data.todo} spec${data.todo === 1 ? "" : "s"} of work not started`,
+    data.counts.deferred ? ` · ${data.counts.deferred} deferred` : "", data.counts.decisions ? ` · ${data.counts.decisions} decision${data.counts.decisions === 1 ? "" : "s"}` : "");
+  return h("div", { class: "stack" }, summary, total ? sections : emptyBox("Every spec has been picked up. Write a new one with write-specs."));
+}
+
+function backlogRow(spec, pill) {
+  const facts = [lbl(spec.kind), spec.requirements ? span("meta", `${spec.requirements} requirement${spec.requirements === 1 ? "" : "s"}`) : null,
+    spec.wave ? span("meta", "wave " + spec.wave) : null, spec.planned ? lbl("plan ready", "violet") : null];
+  const waits = spec.waiting_on.length
+    ? h("span", { class: "meta" }, "Waits on ", spec.waiting_on.map((dep, i) => [i ? ", " : "", link("#/spec/" + dep.id, `#${specLabel(dep.id)} ${dep.title}`),
+      " ", lbl(STAGE_LABEL[dep.stage] || dep.stage, "pill-" + (STAGE_PILL[dep.stage] || "draft"))]))
+    : null;
+  const reason = spec.reason ? h("span", { class: "meta" }, "Deferred ", when(spec.deferred_at), ": ", spec.reason) : null;
+  return h("div", { class: "row" }, h("span", { class: "dot dot-" + pill, "aria-hidden": "true" }),
+    h("div", { class: "main" },
+      h("div", { class: "titleline" }, link("#/spec/" + spec.id, spec.title, "title"), span("meta", "#" + specLabel(spec.id))),
+      h("div", { class: "titleline" }, facts), waits, reason));
 }
 
 // Spec reader ----------------------------------------------------------------------------------------------

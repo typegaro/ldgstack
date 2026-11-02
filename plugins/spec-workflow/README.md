@@ -303,3 +303,7 @@ From the pilot 0082/0087/0088 run.
 - Dashboard: live updates no longer move the page. They wait while you touch, scroll, type, or select ("Update waiting" in the header), keep vertical and sideways scroll positions, and opening another page starts at the top. A stray "null" no longer shows above the pull requests.
 - Dashboard on phones: a two-line header (brand and live status, then one swipeable section strip with the current section kept in view), swipeable tabs, list rows with the marker beside the title and labelled Checks / Review / Bugs, long paths wrapped, 44 px filter and chip targets.
 - Docs and tests no longer name the pilot project.
+
+## Changes in 0.11.2
+
+- Dashboard: a **Backlog** section (`#/backlog`, `/api/backlog`) shows the work no agent has started: ready to start, waiting on other specs (with their current stage), planned but not started (record and plan, no code yet), deferred (with the recorded reason), and decision specs to accept. Each spec shows its kind, requirement count, and wave. The nav count and a link under the pull requests cover the work groups (ready, waiting, planned).
