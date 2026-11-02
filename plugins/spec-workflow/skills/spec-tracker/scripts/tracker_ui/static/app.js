@@ -11,7 +11,7 @@ const STAGE_LABEL = Object.fromEntries(STAGES);
 const EVENT_ICONS = { created: "P", plan: "◇", work: "▲", check_pass: "✓", check_fail: "!", check_other: "○", question: "?", answer: "A", generation: "↻", merge: "⇢", spec: "S" };
 
 const store = { meta: null, prs: null, queues: null, specs: null };
-const view = { prState: "open", prFilter: "", prStatus: "", prArea: "", stage: "all", kind: "all", tab: "", token: 0, live: false };
+const view = { prState: "open", prFilter: "", prStatus: "", prArea: "", stage: "all", kind: "all", tab: "", token: 0, live: false, pending: false };
 
 // DOM helpers ---------------------------------------------------------------------------------------------
 
@@ -33,6 +33,12 @@ function append(node, children) {
     if (child === null || child === undefined || child === false) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
+}
+
+/** Replace a node's children, skipping empty parts (a missing banner is not the text "null"). */
+function fill(node, parts) {
+  node.replaceChildren();
+  append(node, parts);
 }
 
 const span = (cls, text) => h("span", { class: cls, text });
@@ -153,14 +159,15 @@ function renderNav(route) {
   nav.replaceChildren();
   const agents = store.queues ? store.queues.agents.length : 0;
   const items = [
-    ["pulls", "#/pulls", "Pull requests", store.prs ? openPrs().length : null],
+    ["pulls", "#/pulls", ["Pull requests", "PRs"], store.prs ? openPrs().length : null],
     ["queues", "#/queues", "Queues", store.queues ? agents : null],
     ["specs", "#/specs", "Specs", store.specs ? store.specs.specs.length : null],
     ["activity", "#/activity", "Activity", null],
   ];
   const section = { pull: "pulls", spec: "specs" }[route.name] || route.name;
   for (const [id, href, text, count] of items) {
-    const a = h("a", { href }, text, count === null ? null : lbl(String(count)));
+    const [long, short] = Array.isArray(text) ? text : [text, text];
+    const a = h("a", { href, "aria-label": long }, span("long", long), short !== long ? span("short", short) : null, count === null ? null : lbl(String(count)));
     if (id === section) a.setAttribute("aria-current", "page");
     nav.append(a);
   }
@@ -175,7 +182,8 @@ function renderLive() {
   el.classList.toggle("off", !view.live);
   const heads = store.meta ? Object.entries(store.meta.main || {}).map(([repo, sha]) => `${repo} ${sha}`).join(" · ") : "";
   append(el, [h("span", { class: "dot" }), h("span", { class: "project-chip", text: store.meta ? store.meta.project : "" }),
-    h("span", { text: (view.live ? "· Live" : "· Reconnecting…") + (heads ? " · main " + heads : "") })]);
+    h("span", { text: view.live ? (view.pending ? "· Update waiting" : "· Live") : "· Reconnecting…" }),
+    heads ? h("span", { class: "heads", text: "· main " + heads }) : null]);
 }
 
 // Routes --------------------------------------------------------------------------------------------------
@@ -185,13 +193,25 @@ function parseRoute() {
   return { name: parts[0] || "pulls", arg: parts[1] || "" };
 }
 
-async function render() {
+// Sideways-scrolling areas whose position survives a live re-render (matched by order on the page).
+const SCROLLERS = ".scroll, .stepper-box, .tablebox, pre, .tabs, #nav";
+
+function scrollState() {
+  return { y: window.scrollY, x: [...document.querySelectorAll(SCROLLERS)].map((el) => el.scrollLeft) };
+}
+
+function restoreScroll(state) {
+  document.querySelectorAll(SCROLLERS).forEach((el, index) => { if (state.x[index]) el.scrollLeft = state.x[index]; });
+  if (window.scrollY !== state.y) window.scrollTo(0, state.y);
+}
+
+/** options.top: a new page (scroll to the top); otherwise a live or in-page update that keeps every position. */
+async function render(options = {}) {
   const token = ++view.token;
   const route = parseRoute();
   const app = document.getElementById("app");
   const focus = document.activeElement && document.activeElement.id;
   const caret = document.activeElement && document.activeElement.selectionStart;
-  const scroll = window.scrollY;
   try {
     await loadBase();
     let content;
@@ -202,15 +222,21 @@ async function render() {
     else if (route.name === "activity") content = await activityView();
     else content = pullsView();
     if (token !== view.token) return;
+    // Read the positions right before the swap: the user may have scrolled while the data loaded.
+    const kept = scrollState();
     renderNav(route);
     app.replaceChildren(content);
+    if (options.top) {
+      window.scrollTo(0, 0);
+      // On a phone the section strip scrolls sideways: keep the current section visible.
+      document.querySelector('#nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } else restoreScroll(kept);
     document.title = `${route.name === "pulls" ? "Pull requests" : route.name[0].toUpperCase() + route.name.slice(1)} · ldgstack / spec-workflow`;
   } catch (error) {
     if (token !== view.token) return;
     app.replaceChildren(h("div", { class: "banner", role: "alert", text: `Could not load: ${error.message}` }));
   }
-  window.scrollTo(0, scroll);
-  if (focus) {
+  if (focus && !options.top) {
     const again = document.getElementById(focus);
     if (again) {
       again.focus();
@@ -223,7 +249,12 @@ function tabBar(tabs, label, rerender) {
   if (!tabs.some(([id]) => id === view.tab)) view.tab = tabs[0][0];
   const bar = h("div", { class: "tabs", role: "tablist", "aria-label": label });
   for (const [id, text, count] of tabs) {
-    bar.append(h("button", { type: "button", role: "tab", "aria-selected": String(view.tab === id), onclick: () => { view.tab = id; rerender(); } },
+    bar.append(h("button", { type: "button", role: "tab", "aria-selected": String(view.tab === id), onclick: () => {
+        view.tab = id;
+        rerender();
+        // The redraw rebuilds the strip; on a phone it scrolls sideways, so bring the chosen tab into view.
+        document.querySelector('.tabs [aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } },
       text, count === undefined ? null : lbl(String(count))));
   }
   return bar;
@@ -235,7 +266,7 @@ function pullsView() {
   const root = h("div");
   const prs = prList();
   const draw = () => {
-    root.replaceChildren(...pullsParts(prs, draw));
+    fill(root, pullsParts(prs, draw));
   };
   draw();
   return root;
@@ -297,7 +328,8 @@ function prRow(pr) {
       h("div", { class: "titleline" }, link("#/pull/" + encodeURIComponent(pr.feature), pr.title, "title"), pillFor(pr), lbl(repoArea(pr)),
         pr.risk === "high" ? lbl("high risk", "warn") : null, conflicts(pr) ? lbl("conflicts with main", "bad") : null),
       span("meta", `#${pr.spec_id} · ${branch} · ${stamp}${pr.current_role && pr.state === "open" ? " · " + pr.current_role + (pr.model ? ` (${pr.model})` : "") : ""}`)),
-    span("col " + ciClass, ci), span("col", reviewCell(pr)), span("col narrow " + bugClass, bugs));
+    h("div", { class: "cols" }, h("span", { class: "col " + ciClass, "data-label": "Checks", text: ci }),
+      h("span", { class: "col", "data-label": "Review", text: reviewCell(pr) }), h("span", { class: "col narrow " + bugClass, "data-label": "Bugs", text: bugs })));
 }
 
 // Pull request detail -------------------------------------------------------------------------------------
@@ -306,7 +338,7 @@ async function pullView(feature) {
   const data = await api("/api/record/" + encodeURIComponent(feature));
   const pr = data.pr;
   const root = h("div");
-  const draw = () => root.replaceChildren(...pullParts(data, pr, draw));
+  const draw = () => fill(root, pullParts(data, pr, draw));
   draw();
   return root;
 }
@@ -497,7 +529,7 @@ function queuesView() {
 
 function specsView() {
   const root = h("div", { class: "stack" });
-  const draw = () => root.replaceChildren(...specsParts(draw));
+  const draw = () => fill(root, specsParts(draw));
   draw();
   return root;
 }
@@ -529,7 +561,7 @@ function specsParts(redraw) {
 async function specView(id) {
   const data = await api("/api/spec/" + encodeURIComponent(id));
   const root = h("div");
-  const draw = () => root.replaceChildren(...specParts(data, draw));
+  const draw = () => fill(root, specParts(data, draw));
   draw();
   return root;
 }
@@ -716,18 +748,41 @@ function buildList(items, marks) {
 
 // Live updates ---------------------------------------------------------------------------------------------
 
+// While the user touches, scrolls, types, or selects text, live updates wait (a re-render would stop a fling
+// or reset what they are looking at); they apply once the page has been still for a moment.
+const input = { at: 0, touching: false };
+for (const type of ["pointerdown", "wheel", "scroll", "keydown"]) addEventListener(type, () => { input.at = Date.now(); }, { passive: true, capture: true });
+addEventListener("touchstart", () => { input.touching = true; input.at = Date.now(); }, { passive: true });
+for (const type of ["touchend", "touchcancel"]) addEventListener(type, () => { input.touching = false; input.at = Date.now(); }, { passive: true });
+
+function busy() {
+  const typing = document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
+  const selecting = String(window.getSelection ? window.getSelection() : "").length > 0;
+  return input.touching || typing || selecting || Date.now() - input.at < 1500;
+}
+
 function connect() {
   const source = new EventSource("/api/events");
   let timer = null;
+  const apply = () => {
+    if (busy()) {
+      view.pending = true;
+      renderLive();
+      timer = setTimeout(apply, 700);
+      return;
+    }
+    view.pending = false;
+    render();
+  };
   source.addEventListener("hello", () => { view.live = true; renderLive(); });
   source.addEventListener("change", () => {
     clearTimeout(timer);
-    timer = setTimeout(render, 250);
+    timer = setTimeout(apply, 250);
   });
   source.onerror = () => { view.live = false; renderLive(); };
   source.onopen = () => { view.live = true; renderLive(); };
 }
 
-window.addEventListener("hashchange", () => { view.tab = ""; render(); });
+window.addEventListener("hashchange", () => { view.tab = ""; render({ top: true }); });
 render();
 connect();

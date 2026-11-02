@@ -32,7 +32,7 @@ class WorktreeCase(CliTestCase):
             git(main, "config", "user.name", "Test")
             git(main, "add", "-A")
             git(main, "commit", "-q", "-m", "Initial")
-        (self.root / "be" / "main" / ".env").write_text("PORT=1\nexport DATABASE_URL=postgres://dev/m33\n", encoding="utf-8")
+        (self.root / "be" / "main" / ".env").write_text("PORT=1\nexport DATABASE_URL=postgres://dev/app\n", encoding="utf-8")
         implementation = self.root / "implementation"
         implementation.mkdir()
         (implementation / "workspace.json").write_text(json.dumps({"repos": ["be", "fe"], "copy": {"be": [".env"]},

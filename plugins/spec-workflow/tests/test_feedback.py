@@ -1,4 +1,4 @@
-"""0.10.7: m33 run feedback: late reviewer re-records, narrow restores, and parent-filed bugs."""
+"""0.10.7: pilot run feedback: late reviewer re-records, narrow restores, and parent-filed bugs."""
 from __future__ import annotations
 
 import json

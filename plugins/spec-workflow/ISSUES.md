@@ -1,6 +1,6 @@
 # spec-workflow: Known Issues
 
-Observed while running the orchestrator on m33, specs 0021–0028, 2026-10-22/23.
+Observed while running the orchestrator on the pilot project, specs 0021–0028, 2026-10-22/23.
 
 ## What worked (keep)
 
@@ -41,7 +41,7 @@ The hook blocks Edit/Write on `specs/` for subagents, but `spec.py new` through 
 ### 5. `inspect check all` is assumed but optional
 **Resolved (0.2.0):** the dev-inspection convention requires `check all`. Where it's missing, skills record a `not_applicable` check (new, non-blocking result).
 
-The orchestrator and testers expect an inspection `check all` command. m33's CLI has none, so every agent reported it as not applicable.
+The orchestrator and testers expect an inspection `check all` command. The pilot project's CLI has none, so every agent reported it as not applicable.
 - **Fix:** make the dev-inspection convention require `check all` explicitly, or have the skills detect it and skip cleanly.
 
 ### 6. Requirement derivation is manual
@@ -71,7 +71,7 @@ The parent amended draft spec 0022, which had already started, then had to run `
 2. `requirement import` (#6)
 3. A light path for trivial follow-ups (#1) and relaxed role transitions (#3)
 
-## Retro findings (workflow-retro on m33 session b43fa2d7, plugin 0.1.0, specs 0021–0024)
+## Retro findings (workflow-retro on the pilot project session b43fa2d7, plugin 0.1.0, specs 0021–0024)
 
 Weighted tokens = input + 1.25×cache write + 0.1×cache read + 5×output. 20 agent runs: 169M processed, 25M weighted, 2.9M final context (Claude Code's `subagent_tokens`). Estimates overlap.
 
@@ -131,7 +131,7 @@ Three heavy lanes (0024, 0028, 0029) running at once hit the account's session l
 Testers wrote a mock OAuth server and ChatGPT backend, a mock MCP server, Playwright drivers and screenshotters, `go -overlay` programs to plant DB state or read credentials, private fe copies with port rewrites (`lane24/sync.sh`), and seed and cleanup scripts in the session scratchpad, and rebuilt them each round. Retro on session b43fa2d7: 58 scripts outside the project in 7 runs (tester 45, implementer 10), ~57k tokens of script text, ~0.5M weighted; `mock.py`, `s*.py`, `lib.py`, `insp.sh` rebuilt across runs.
 - **Fix:** a durable, project-owned toolkit registered in a CLI-managed manifest, filled through recorded tool gaps by a toolsmith, and maintained by implementers as features change.
 
-## Prose-only rules drifted (m33 run, plugin 0.4.0–0.5.0)
+## Prose-only rules drifted (pilot run, plugin 0.4.0–0.5.0)
 
 The CLI- and hook-enforced rules held; rules stated only in skill text drifted. 0.6.0 moves them into code and measures the rest with `workflow-retro --conformance`.
 
@@ -163,9 +163,9 @@ Rule drift was found by reading transcripts.
 The user found hard path blocking too restrictive for subagents.
 **Resolved (0.6.1):** lane violations are advisory by default. The hook warns and asks the agent to mention the edit in its handoff. `SPEC_WORKFLOW_STRICT_LANES=1` restores blocking. The retro conformance check still reports out-of-lane edits.
 
-## Retro findings (workflow-retro on m33 session b43fa2d7, plugin 0.4.0–0.6.1, specs 0024–0032, 2026-10-23/25)
+## Retro findings (workflow-retro on the pilot project session b43fa2d7, plugin 0.4.0–0.6.1, specs 0024–0032, 2026-10-23/25)
 
-33 agent runs, 41.2M weighted (2 plugin-dev runs: 2.9M). Existing keys recur (runs.long-context 9.6M, turns.batching 9.5M, cli.rejections 5→20, prompts.not-brief 8 of 14 delegations after 0.6.0); see `~/.claude/spec-workflow-retro/m33/0.6.1/retro.md`.
+33 agent runs, 41.2M weighted (2 plugin-dev runs: 2.9M). Existing keys recur (runs.long-context 9.6M, turns.batching 9.5M, cli.rejections 5→20, prompts.not-brief 8 of 14 delegations after 0.6.0); see `~/.claude/spec-workflow-retro/the pilot project/0.6.1/retro.md`.
 
 ### 27. Verifier freshness check misreads IDs as specs (conformance: verifiers.non-fresh)
 **Resolved (0.7.0):** `TRACKER_FEATURE = \b([0-9]{4}(?:-[a-z][a-z0-9]*)+)\b`; regression test with a bug ID and a session UUID.
@@ -190,7 +190,7 @@ All 5 violations are false positives: `TRACKER_FEATURE` in `retrolib/transcripts
 The whole-codebase review and cross-spec test (2 runs, ~0.9M weighted) produced spec 0032 (R1–R12): 1 escape from 0026 (pagination cursor), 6 in older specs (0002, 0003, 0007, 0019, 0022), lint, and 4 toolkit gaps. Per-spec rounds this run: reviewer 17 bugs, tester 13.
 - **Fix:** spec-orchestrator `references/procedures.md` "When the queue is empty": keep the gate; add that its findings name the originating spec and finder class, so the retro can attribute escapes.
 
-## Pilot findings (planner/executor split on m33 specs 0033/0034, plugin 0.6.1, 2026-10-25)
+## Pilot findings (planner/executor split on the pilot project specs 0033/0034, plugin 0.6.1, 2026-10-25)
 
 Opus planner → Sonnet executor/fixer/tester/toolsmith → Opus reviewer. Executor peak context 96–141k (Opus implementers: 250–550k); reviewers rated the code good and close to the plan and still caught real bugs.
 
@@ -244,7 +244,7 @@ The PreToolUse hook warns when the prompt lacks the `[Generated by spec-tracker 
 - **Fix:** accept a prompt that names a brief file whose first line contains the marker.
 
 ### 43. No way to defer or withdraw a draft spec
-The m33 user deferred 0043 (Kubernetes adapter) until the product is ready. spec-cli has no delete, withdraw or defer command, and deleting the file would break accepted decision 0044's `references`. `ready`/`next` will keep offering it.
+The user deferred 0043 (Kubernetes adapter) until the product is ready. spec-cli has no delete, withdraw or defer command, and deleting the file would break accepted decision 0044's `references`. `ready`/`next` will keep offering it.
 - **Fix:** add `spec defer <id> --reason` / `spec undefer <id>` (a derived `deferred` status logged in history, excluded from `ready`/`next`, still valid as a link target). Optionally `spec withdraw` for drafts nobody references.
 **Resolved (0.8.0):** `spec defer <id> --reason` / `spec undefer <id>` (derived `deferred` status in the manifest history, skipped by `ready`/`next`/`waves`, `list` shows `[deferred]`, still a valid link target). `spec withdraw` was not added.
 - Also: `assign --from-plan` reported "no plan stored" for 0038 after several fix rounds although the plan existed earlier (fixer reassignment); used `--paths` as a workaround.
@@ -306,9 +306,9 @@ After `spec edit` + `spec-sync` on a plan_ready record, `assign --from-plan` fai
 
 ## 56. `spec edit` can't change a draft's frontmatter (title, amends)
 
-Editing draft 0048 (m33) into "Workspace Read API", which amends 39, 40 and 47, left `title: Workspace Explorer` and `amends: []`, because `edit --from` replaces only the body and there is no `link`/`retitle` command. Proposal: `spec edit <id> --title ... --amends ... --references ...` for unaccepted specs, recorded in the log like body edits.
+Editing draft 0048 (pilot project) into "Workspace Read API", which amends 39, 40 and 47, left `title: Workspace Explorer` and `amends: []`, because `edit --from` replaces only the body and there is no `link`/`retitle` command. Proposal: `spec edit <id> --title ... --amends ... --references ...` for unaccepted specs, recorded in the log like body edits.
 
-## Retro 0.8.2 (m33 session b43fa2d7, specs 0036–0050)
+## Retro 0.8.2 (pilot session b43fa2d7, specs 0036–0050)
 
 ### 57. Opus fixers with bundled bugs are the largest cost (retro: fixer.tier)
 Since 0036, fixers took 33% of subagent cost (39.7M of 117.9M cost units, 15 runs). Five Opus first-round fixers took 6.1–7.9M each, with 151–243 tool calls and 244–424k final context (0038 large output, 0039 BUG-021, 0040 bugs 001-009, 0042 bugs 001-005, 0045 bugs 001-004). The orchestrator says fixers run on the efficient tier and escalate to Opus only after a failed retest, but the parent picked Opus for first rounds.
@@ -336,32 +336,32 @@ A resumed executor that takes the last 3–4 batches is the most expensive run o
 
 ## 57. Concurrent `toolkit update --command` overwrites other specs' additions
 
-In m33, lanes for 0046, 0047 and 0051 each updated the shared `be-inspect` entry by rewriting the whole `--command` string, so each one dropped the others' documentation, and `toolkit verify` still passed. Proposal: store per-spec capability notes (`--capability` keyed by owner spec) instead of one free-text command, or have `update` refuse when the entry changed since the caller last read it.
+In the pilot project, lanes for 0046, 0047 and 0051 each updated the shared `be-inspect` entry by rewriting the whole `--command` string, so each one dropped the others' documentation, and `toolkit verify` still passed. Proposal: store per-spec capability notes (`--capability` keyed by owner spec) instead of one free-text command, or have `update` refuse when the entry changed since the caller last read it.
 
 ## 58. `spec new --supersedes 0` is accepted and marks spec 0000
 
 `spec new ... --supersedes 0` (a typo for "none") wrote `supersedes: [0]` into the new spec. The guard hook then blocks every way to fix the frontmatter of an unaccepted spec (see #56). `new` should reject 0 when the user meant none, or `edit` should be able to change links.
 
 ### 62. spec-sync also drops the stored plan and pulls in amended targets (retro: tracker.spec-sync)
-m33, 2026-10-28: two mid-run user amendments (0059 R6, 0060 R3) each needed spec-sync. Each sync reset every implemented mark (13 and 20 requirements; extends #44) and deleted the stored plan, so `brief --batch N` failed with "no plan stored" until the parent re-added it from a saved `plan show` copy. The 0060 sync also imported 4 amended-target requirements (38:R6, 40:R2, 46:R4, 51:R6) that the original import, without `--include-amended`, had skipped. Each sync cost one re-marking agent round plus 4–6 parent tracker calls.
+The pilot project, 2026-10-28: two mid-run user amendments (0059 R6, 0060 R3) each needed spec-sync. Each sync reset every implemented mark (13 and 20 requirements; extends #44) and deleted the stored plan, so `brief --batch N` failed with "no plan stored" until the parent re-added it from a saved `plan show` copy. The 0060 sync also imported 4 amended-target requirements (38:R6, 40:R2, 46:R4, 51:R6) that the original import, without `--include-amended`, had skipped. Each sync cost one re-marking agent round plus 4–6 parent tracker calls.
 - **Fix:** spec-sync keeps the plan (it marks it `stale` when a changed requirement appears in a batch) and invalidates only the changed requirements (#44). `init`/`requirement import` should include amended targets by default, so requirements don't appear mid-run.
 
 **Resolved (0.8.4):** spec-sync keeps the plan and marks it `stale` (status, brief warning; `brief --batch N` still works), invalidates only changed/new requirements, and import includes amended targets by default (`--exclude-amended` opts out).
 
 ### 63. A fresh agent can't claim an assignment a finished agent still holds (retro: tracker.stale-claim)
-m33 0060: a batch-3 implementer launched on the same assignment as the finished batch 1–2 implementer was refused ("already claimed by another agent") and stopped. That cost one launch, plus a release and re-assign. This is not the usage-limit case in #46: the earlier agent had completed normally.
+The pilot project 0060: a batch-3 implementer launched on the same assignment as the finished batch 1–2 implementer was refused ("already claimed by another agent") and stopped. That cost one launch, plus a release and re-assign. This is not the usage-limit case in #46: the earlier agent had completed normally.
 - **Fix:** `brief` for a role whose assignment is claimed by an agent that is no longer running should reissue the assignment, or say "use --fresh". Alternatively, an agent's final report (no handoff) releases its claim but keeps the lane.
 
 **Resolved (0.8.4):** `brief` reissues an assignment an earlier agent claimed, with a warning; documented beside `claim` in spec-tracker SKILL.md.
 
 ### 64. Cross-spec lane overlap forces patch handoffs (retro: lanes.cross-spec)
-m33: the 0062 fixer needed fe/tests/support and fe/tools/lib, which the concurrent 0060 implementer's coarse lane (`fe/tests/**`, `fe/tools/**`) owned. `assign` refused, so the fixer wrote 5 patches and the parent applied them, then resumed the fixer to verify. That added a parent round and a verification gap: the patched infrastructure ran unverified while 0060 kept testing. The same happened earlier with 0059 and request.ts.
+The pilot project: the 0062 fixer needed fe/tests/support and fe/tools/lib, which the concurrent 0060 implementer's coarse lane (`fe/tests/**`, `fe/tools/**`) owned. `assign` refused, so the fixer wrote 5 patches and the parent applied them, then resumed the fixer to verify. That added a parent round and a verification gap: the patched infrastructure ran unverified while 0060 kept testing. The same happened earlier with 0059 and request.ts.
 - **Fix:** plans should declare lanes by file, not `dir/**`, for shared test infrastructure. `assign` should allow a narrow sub-lane carve-out (`--carve fe/tests/support/** from ASSIGN-x`) with both agents notified.
 
 **Resolved (0.8.4):** planning guidance owns shared test infrastructure by file or narrow subdir; `assign` overlap errors list exact pairs, narrow non-overlapping globs, and a carve command; `assign --carve <glob> --from <ASSIGNMENT>` moves a narrow glob between lanes, recorded on both and shown in the giving lane's brief.
 
 ### 65. Serial test suites dominate wall time (retro: tests.serial)
-m33, 2026-10-28: before 0062, each Playwright suite ran with 1 worker on `next dev`. The 0059 implementer spent most of its 100 min waiting on serial e2e and audits, and its tester could not run full e2e at all, because `next dev` refused to start beside the dev server. After 0062: mobile went from 379 s to 150 s, mobile-audit from 84 s to 19 s, and e2e now runs at all (about 88 s). Covered in 0.8.3 skill text (test.runner, Parallel testing).
+The pilot project, 2026-10-28: before 0062, each Playwright suite ran with 1 worker on `next dev`. The 0059 implementer spent most of its 100 min waiting on serial e2e and audits, and its tester could not run full e2e at all, because `next dev` refused to start beside the dev server. After 0062: mobile went from 379 s to 150 s, mobile-audit from 84 s to 19 s, and e2e now runs at all (about 88 s). Covered in 0.8.3 skill text (test.runner, Parallel testing).
 - **Follow-up:** the retro script should measure Bash wall time per category (test/build/lint) per run, so test waiting shows up as a number. Today `wall_seconds` spans from first to last activity, including idle time across resumes (the 0040 fixer shows 754 min). Report active time separately.
 
 **Resolved (0.8.4):** the retro reports `active_seconds` (API + tool time) beside wall time, Bash seconds per test/build/lint/other (also in by-role tables), and a `tests.waiting` finding when test+build exceeds 40% of a run's active time.
@@ -369,22 +369,22 @@ m33, 2026-10-28: before 0062, each Playwright suite ran with 1 worker on `next d
 ### 66. Lane overlap treats `*` as crossing directories (retro: lanes.glob-star)
 **Resolved (0.8.4):** overlap now also compares segment-depth ranges (`depth_range`), so `dir/*.go` no longer overlaps `dir/sub/**` or files in `dir/sub/`.
 **Also (0.8.4):** a literal path overlaps a glob only when the glob selects it or it is a directory above the glob (`policy-form.spec.ts` no longer overlaps `explorer-*.spec.ts`).
-m33, 2026-10-29: `assign --paths be/internal/compute/egressproxy/proxy_test.go` was refused as overlapping `be/internal/compute/*.go` held by another lane. `*` should match within one path segment and only `**` should cross directories, as the hook's own help says. Workaround used: `--carve` from the other lane.
+The pilot project, 2026-10-29: `assign --paths be/internal/compute/egressproxy/proxy_test.go` was refused as overlapping `be/internal/compute/*.go` held by another lane. `*` should match within one path segment and only `**` should cross directories, as the hook's own help says. Workaround used: `--carve` from the other lane.
 - **Fix:** use segment-aware glob matching in the overlap check, with a test for `dir/*.go` against `dir/sub/x.go`.
 
 ### 67. An executor running `brief --batch N+1` reissues its own assignment
-m33 0049: the implementer generated the next batch's brief itself, as the parent told it to. The 0.8.4 stale-claim rule then reissued its own claimed assignment (-003 → -004), and it had to re-claim. `brief` should not reissue an assignment when the caller is the agent holding the claim, using the agent-id marker from the hook, or `--same-agent`.
+The pilot project 0049: the implementer generated the next batch's brief itself, as the parent told it to. The 0.8.4 stale-claim rule then reissued its own claimed assignment (-003 → -004), and it had to re-claim. `brief` should not reissue an assignment when the caller is the agent holding the claim, using the agent-id marker from the hook, or `--same-agent`.
 
 ### 68. A fix round clears every tested mark, even for test-only fixes (retro: tracker.retest-scope)
-m33 2026-10-29: in 0060 (BUG-004) and 0062 (BUG-005/006/007), the fixes changed only test files, yet each fixer round cleared all of the tester's `tested` marks. The tester then had to re-mark 19 and 10 requirements from unchanged evidence, which cost an extra tester round each time. A failed check that was later superseded by passing evidence under another name also kept blocking the gate.
+The pilot project 2026-10-29: in 0060 (BUG-004) and 0062 (BUG-005/006/007), the fixes changed only test files, yet each fixer round cleared all of the tester's `tested` marks. The tester then had to re-mark 19 and 10 requirements from unchanged evidence, which cost an extra tester round each time. A failed check that was later superseded by passing evidence under another name also kept blocking the gate.
 - **Fix:** a fixer round invalidates only the requirements linked to the fixed bugs (`bug add --requirement`), plus any whose `implemented` location files changed. When every changed file is a test file, keep the tested marks. `gate acceptance` should list a failed check that a newer passing check supersedes, and let the tester mark it superseded rather than re-record it.
 
 ### 69. An edit outside the lane got through
-m33 0052 batch 1: the implementer edited `be/internal/database/compute_leases_integration_test.go`, which was not in its lane (only `compute_policies.go` was), and the path-guard hook didn't block it. The likely route is a Bash-based edit (sed or a heredoc) that the hook doesn't inspect, or a gap in matching literal paths. Investigate which tool was used, and make sure `guard_paths.py` also covers Bash writes or flags them in the record.
+The pilot project 0052 batch 1: the implementer edited `be/internal/database/compute_leases_integration_test.go`, which was not in its lane (only `compute_policies.go` was), and the path-guard hook didn't block it. The likely route is a Bash-based edit (sed or a heredoc) that the hook doesn't inspect, or a gap in matching literal paths. Investigate which tool was used, and make sure `guard_paths.py` also covers Bash writes or flags them in the record.
 - 2026-10-29 again: the 0052 batch 8 implementer edited fe/tests/e2e/design-system.spec.ts outside its lane and was not blocked.
 
 ### 70. Repeated `assign --carve` replaces the receiving lane instead of adding to it
-m33 2026-10-29: three `assign --role fixer --carve <glob> --from X` calls each created a new fixer assignment, released the previous one, and lost its carved glob. A following `--paths` call replaced the lane again. The giving lane kept all three exclusions. Expected: `--carve` adds the glob to the role's active assignment, and `--paths` combined with `--carve` in one call builds a single lane.
+The pilot project 2026-10-29: three `assign --role fixer --carve <glob> --from X` calls each created a new fixer assignment, released the previous one, and lost its carved glob. A following `--paths` call replaced the lane again. The giving lane kept all three exclusions. Expected: `--carve` adds the glob to the role's active assignment, and `--paths` combined with `--carve` in one call builds a single lane.
 
 ### 71. Toolkit taxonomy lacks a backend driver capability
 A protocol driver (0055 `stt-drive`: WebSocket client with expectations) had to register as `be.fault`. Add `be.drive` (and `fe.drive` if missing) to the capability taxonomy and `toolkit verify`.
@@ -403,7 +403,7 @@ After `spec-sync` re-imported two requirements for a wording-only R1 edit (code 
 - `check waive` only accepts a `not_run` check, so a check that failed for another spec's reason (a parallel lane's regression) can only be cleared by fixing the other lane and re-running. Consider `check waive --supersede-failed` with a recorded cause and owner spec.
 - `assign --paths $VAR` in zsh passes one argument containing spaces; the tracker stores it as one bogus glob instead of rejecting it. Reject paths containing whitespace.
 
-## Throughput (m33 run 2026-10-30: "why are features slow?")
+## Throughput (pilot run 2026-10-30: "why are features slow?")
 
 About 17 h of agent wall time over 57 runs; tests and builds ≈30% of active time. The time went to serial scheduling, review ping-pong, and one shared working tree, not to testing.
 
@@ -436,9 +436,9 @@ In 0082 batch 4's executor ran `handoff --to parent` while batch 6's executor (`
 
 ### 83. Copied `.env` pointed spec checkouts at the dev database (0.10.0–0.10.5)
 The suggested `copy: {"be": [".env"]}` gave every checkout the dev `DATABASE_URL`; an agent in a spec checkout migrated the dev database to the branch's migration 51 before merge.
-**Resolved (0.10.6):** `env` overrides in workspace.json and a procedures rule; m33 also rewrites the URL in a `setup` step.
+**Resolved (0.10.6):** `env` overrides in workspace.json and a procedures rule; the pilot project also rewrites the URL in a `setup` step.
 
-### 84. m33 0082/0087/0088 run friction (0.10.6)
+### 84. The pilot project 0082/0087/0088 run friction (0.10.6)
 Multi-directory smokes broke under the worktree rewrite (`cd ..`, `direnv exec fe`); a late reviewer re-record of a `not_run` check forced a no-op tester round; `restore` reset all 16 requirements for a 2-defect fix; the parent couldn't file final-review bugs.
 **Resolved (0.10.7):** idempotent rewrite with `direnv exec` and `cd ..` handling; ordering exemption for same-generation re-runs of `not_run` reviewer checks; `restore --touches`; `bug add --parent-confirmed --found-by`.
 

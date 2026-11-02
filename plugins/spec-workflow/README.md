@@ -276,11 +276,11 @@ Throughput from the 2026-10-30 retro (#76–#80): specs no longer share one work
 
 ## Changes in 0.10.6
 
-- Worktree mode: `env` in workspace.json overrides keys in copied dotenv files (`{"env": {"be": {".env": {"DATABASE_URL": "..."}}}}`), so spec checkouts can't reach the dev database. In m33 a checkout that inherited `.env` migrated the dev database to an unmerged branch's migration; the documented example now overrides it.
+- Worktree mode: `env` in workspace.json overrides keys in copied dotenv files (`{"env": {"be": {".env": {"DATABASE_URL": "..."}}}}`), so spec checkouts can't reach the dev database. In the pilot project a checkout that inherited `.env` migrated the dev database to an unmerged branch's migration; the documented example now overrides it.
 
 ## Changes in 0.11.0
 
-Local PRs, CI, and queues in worktree mode, from the m33 run (the parent hand-scheduled the test slot, 0082 and 0087 both took migration 52 and the conflict surfaced only at merge, agents ran full suites repeatedly).
+Local PRs, CI, and queues in worktree mode, from the pilot run (the parent hand-scheduled the test slot, 0082 and 0087 both took migration 52 and the conflict surfaced only at merge, agents ran full suites repeatedly).
 
 - `tracker pr open`: the writer's handoff to review. It commits the checkout and refuses, keeping the record with the writer, when the branch has no commits, `git merge-tree` finds conflicts with main, a PR check blocks, or the fast CI tier fails. With a `ci` section a writer's direct `handoff --to reviewer` is refused; briefs name `pr open`. `pr status` re-checks every open PR against current main; `pr return` sends a conflicting one to the fixer.
 - workspace.json `ci` tiers per repo (`fast`, optionally `full`) run in the spec checkout with the worktree path rewrite, outside the project lock. Each run is check `ci-<tier>` with commands, exit codes, seconds, branch and main SHAs, and a log under `implementation/ci/<feature>/`; only CI runs record it. The acceptance gate needs a passing `ci-fast` on the branch's current SHAs. `tracker ci run` reruns a tier.
@@ -291,9 +291,15 @@ Local PRs, CI, and queues in worktree mode, from the m33 run (the parent hand-sc
 
 ## Changes in 0.10.7
 
-From the m33 0082/0087/0088 run.
+From the pilot 0082/0087/0088 run.
 
 - Worktree path rewrite: `direnv exec <repo>` resolves to the checkout too, a plain `cd ..` right after a rewritten `cd <repo>` climbs back to the project root (`cd ../..`), and paths that already name a checkout (`fe/main`) are left alone, so the rewrite is idempotent. `spec preflight` now uses the same rewrite.
 - Acceptance ordering: a reviewer re-running its own `not_run` check in the same generation no longer forces another tester round; a new passing review after the test still does.
 - `tracker restore --touches REQ...`: a narrow restore resets only those requirements; the rest keep their implementation and test evidence. Fresh review and test checks are still required.
 - `bug add --parent-confirmed --found-by <finder>`: the parent files findings, e.g. from the final whole-codebase review.
+
+## Changes in 0.11.1
+
+- Dashboard: live updates no longer move the page. They wait while you touch, scroll, type, or select ("Update waiting" in the header), keep vertical and sideways scroll positions, and opening another page starts at the top. A stray "null" no longer shows above the pull requests.
+- Dashboard on phones: a two-line header (brand and live status, then one swipeable section strip with the current section kept in view), swipeable tabs, list rows with the marker beside the title and labelled Checks / Review / Bugs, long paths wrapped, 44 px filter and chip targets.
+- Docs and tests no longer name the pilot project.
