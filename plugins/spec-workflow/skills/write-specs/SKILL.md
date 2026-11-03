@@ -1,6 +1,6 @@
 ---
 name: write-specs
-description: Create or evolve specifications in specs/ while strictly preserving the user's requested scope. Specs are append-only like database migrations, so an implemented spec is changed by writing a new linked spec. Also covers the requirement format, adversarial review, and accepted-risk decisions. Use before creating or changing any specification, or when the user describes a feature, convention, or decision to specify.
+description: Create or evolve specifications in specs/ while strictly preserving the user's requested scope. Specs are append-only like database migrations, so an implemented spec is changed by writing a new linked spec. Also covers the requirement format, adversarial review, defined-later and accepted-risk items, and starting a spec from one of them. Use before creating or changing any specification, or when the user describes a feature, convention, or decision to specify.
 ---
 
 # Writing Specifications
@@ -43,6 +43,26 @@ Every rule that someone could check is a numbered bullet:
 - Before acceptance, renumbering is fine. After acceptance, IDs are permanent: a newer spec changes or removes one with `(replaces X:Rn)` or `(removes X:Rn)` at the start of its own requirement.
 - Context, rationale, flows, examples, and diagrams are free text around the requirements.
 
+## Defined later and accepted risks
+
+Two more numbered bullets keep track of what a spec leaves for later. `spec later` and `spec risks` list the open ones across every spec (`--json`, `--all` adds resolved ones).
+
+```markdown
+## Defined later
+
+- **L1** Streaming to the browser: how replies stream, and what happens when the tab closes.
+
+## Accepted risks
+
+- **A1** Single database: an outage stops every tenant. Revisit when the first paying tenant onboards.
+```
+
+- `L<n>` (defined later): a question the user chose to answer in a future spec. The text before the colon is the suggested title of that spec; after it, what is left open. Write one instead of free-text "defined later" or "TBD" prose. The spec must stand without the answer; if a requirement can't be implemented without it, it is a missing decision, so ask.
+- `A<n>` (accepted risk): a risk the user explicitly accepted (see Accepted risks below). After the colon: the chosen behavior, its consequence, and the revisit trigger.
+- Number each kind sequentially in the spec, like `R<n>`; after acceptance the IDs are permanent. Reference them as `<id>:L<n>` and `<id>:A<n>`.
+- A spec that defines an `L` item, or addresses an `A` item, is a normal spec created the normal way. It says so in its body with a line `Resolves 1:L1.` (several: `Resolves 1:L1, 4:A2.`), and links the source spec in `--references` (or `--depends-on`/`--amends` when that is the real relation). The source spec is never edited: `spec later --all` shows the item as resolved by the new spec. `spec validate` rejects a `Resolves` that names a missing item or a newer spec.
+- If the new spec answers only part of the item, it adds its own `L` item for the rest.
+
 ## Testability section
 
 A `feature` or `change` spec that adds or changes persisted or runtime state, a UI flow, or an external integration ends with `## Testability`: `- **R<n>** [ops]` requirements for its own testing and inspection plan, built with the feature as part of the same spec:
@@ -57,7 +77,7 @@ Each tool is reusable: a durable, generic command (subcommands, flags, JSON outp
 
 ## Workflow
 
-1. Run `spec list` and read the related specs. Run `spec show <id> --effective` for any spec you build on, and read the `decision` specs that affect the work.
+1. Run `spec list`, `spec later` and `spec risks`, and read the related specs. Run `spec show <id> --effective` for any spec you build on, and read the `decision` specs and accepted risks that affect the work. If the request matches an open `L` or `A` item, start from it: its text is the starting question list, and the new spec says `Resolves <id>:<item>`.
 2. Extract only the explicitly requested points, and ask about any ambiguity that would require assumptions.
 3. Decide: `spec edit` (not accepted yet) or `spec new` with the right kind and links.
 4. Write the body: concise context plus numbered requirements, and the `## Testability` section when it applies.
@@ -65,12 +85,12 @@ Each tool is reusable: a durable, generic command (subcommands, flags, JSON outp
 6. Apply the answers and repeat the review until each remaining risk is resolved or explicitly accepted by the user.
 7. Verify that every statement comes from the user, approved policy, or a recorded decision. Remove anything inferred.
 8. Run `spec validate`.
+9. When the user asks what to define next, or a spec is finished, offer the open items from `spec later` and `spec risks` (with the draft specs from `spec list`) and let the user pick.
 
-## Accepted risks are decision specs
+## Accepted risks
 
 - Never infer risk acceptance from MVP scope, urgency, or silence. A risk is accepted only when the user explicitly accepts it, or explicitly chooses an option whose stated consequence includes it.
-- Record each accepted risk as `spec new --kind decision --title "Accept: <risk>" --references <affected ids>`. Its body records: the chosen behavior, consequence, rationale, current guardrails, revisit trigger, and closure criteria.
-- The affected spec states the actual chosen behavior and cites the decision spec. A decision never replaces the behavior contract.
-- To close or change a decision, write a new spec that supersedes it.
-- When new work reaches a decision's revisit trigger, raise it again instead of silently carrying the risk forward.
-- Never record unaccepted review findings as decisions.
+- Record each accepted risk as an `- **A<n>**` item in the spec it affects: the chosen behavior, consequence, and revisit trigger (add rationale and guardrails when they matter). The spec's requirements state the actual chosen behavior; the item never replaces them.
+- To address a risk, write a new spec with `Resolves <id>:A<n>`. Risks that span several specs, or that need a long rationale, may still be a `decision` spec titled "Accept: <risk>"; existing ones stay valid, and a newer spec that supersedes one closes it.
+- When new work reaches a risk's revisit trigger (`spec risks` lists them), raise it again instead of silently carrying the risk forward.
+- Never record unaccepted review findings as accepted risks.

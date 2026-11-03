@@ -45,7 +45,7 @@ Agents inherit your default model. Set the tiers per agent, e.g. `"agent": {"spe
 | Kind | Name | Purpose |
 |---|---|---|
 | Skill | `write-specs` | Scope-preserving spec writing, requirement format, append-only evolution, decision specs |
-| Skill | `spec-cli` | `spec.py`: git for specs (new, list, ready, waves, defer, show --effective, log, graph, validate, archive, unlock, promote, adopt) |
+| Skill | `spec-cli` | `spec.py`: git for specs (new, list, ready, waves, defer, later, risks, show --effective, log, graph, validate, archive, unlock, promote, adopt) |
 | Skill | `adversarial-spec-review` | Contract-level review of specs |
 | Skill | `spec-orchestrator` | Parent loop: implement → review → test → fix in dependency order |
 | Skill | `test-toolkit` | Durable project test toolkit (`implementation/toolkit.json`): capability taxonomy, tool rules, tool gaps, frontend driver design |
@@ -311,6 +311,12 @@ From the pilot 0082/0087/0088 run.
 ## Changes in 0.12.1
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
+
+## Changes in 0.13.0
+
+- Defined-later and accepted-risk items: numbered `- **L<n>** <suggested title>: <what is left open>` and `- **A<n>** <risk>: <behavior, consequence, revisit trigger>` bullets in any spec. `spec later` and `spec risks` (`--json`, `--all`) list the open ones across specs; `status` counts them. A newer spec that defines or addresses one says `Resolves 1:L2` in its body; the source spec is never edited, and the item shows as resolved by the new spec. `validate` rejects duplicate item ids and a `Resolves` to a missing item or a newer spec.
+- write-specs and adversarial-spec-review record "defined later" answers as `L` items and accepted risks as `A` items in the affected spec (instead of free text and "Accept: <risk>" decision specs, which stay valid), and offer the open items when choosing what to define next. The orchestrator never implements them and reports them at the end of a run.
+- Dashboard Backlog: three groups, **Draft specs** (the existing ready, waiting, planned, deferred, and decisions lists), **To define** (open `L` items), and **Accepted risks** (open `A` items), so you can choose where to start. `/api/backlog` adds `later` and `risks`.
 
 ## Changes in 0.12.0
 

@@ -157,6 +157,11 @@ class Project:
         result = self.cached("waves", lambda: self.run(SPEC_CLI, "waves"))
         return result if isinstance(result, dict) else {}
 
+    def open_items(self, command: str) -> list[dict[str, Any]]:
+        """Open `L<n>` (command `later`) or `A<n>` (command `risks`) items across specs."""
+        result = self.cached(command, lambda: self.run(SPEC_CLI, command))
+        return result if isinstance(result, list) else []
+
     def pr_status(self) -> dict[str, Any] | None:
         result = self.cached("pr_status", lambda: self.run(TRACKER_CLI, "pr", "status"))
         return result if isinstance(result, dict) and isinstance(result.get("prs"), list) else None
@@ -498,7 +503,7 @@ def requirement_count(project: Project, spec: dict[str, Any]) -> int:
 
 def build_backlog(project: Project) -> dict[str, Any]:
     """Specs no agent has started: ready, waiting on unfinished specs, planned ahead (record and plan, no code yet), deferred,
-    and decision specs still to accept."""
+    and decision specs still to accept. Beside them, the open items a new spec can start from: defined later and accepted risks."""
     def build() -> dict[str, Any]:
         records = project.records()
         specs = {spec["id"]: spec for spec in project.specs()}
@@ -539,7 +544,9 @@ def build_backlog(project: Project) -> dict[str, Any]:
         for rows in groups.values():
             rows.sort(key=lambda row: (row["wave"] or 999, row["id"]))
         counts = {group: len(rows) for group, rows in groups.items()}
-        return {"groups": groups, "counts": counts, "todo": counts["ready"] + counts["waiting"] + counts["planned"]}
+        later, risks = project.open_items("later"), project.open_items("risks")
+        return {"groups": groups, "counts": counts, "todo": counts["ready"] + counts["waiting"] + counts["planned"],
+                "later": later, "risks": risks}
     return project.cached("backlog_view", build)
 AMENDS = re.compile(r"\(amends ([^)]*)\)")
 
