@@ -96,7 +96,7 @@ A read-only local web dashboard shows pull requests, queues and agents, the spec
 cd skills/spec-tracker/scripts && python3 -m tracker_ui --root <project> [--port 8733] [--host 127.0.0.1]
 ```
 
-(`spec_tracker.py ui` starts the same server once that hook is available.) Data comes from the tracker and spec CLIs (`--json`) and from `implementation/` and `specs/`. If `pr status` or `queue status` is missing, the pull-request list is derived from the records and the Queues page says "Queues not available". The page updates live through server-sent events when files under `implementation/` or `specs/` change. Routes: `#/pulls`, `#/pull/<feature>`, `#/queues`, `#/specs`, `#/spec/<id>`, `#/activity`; JSON under `/api/` (`prs`, `queues`, `specs`, `spec/<id>`, `record/<feature>`, `activity`, `meta`, `events`).
+(`spec_tracker.py ui` starts the same server once that hook is available.) Data comes from the tracker and spec CLIs (`--json`) and from `implementation/` and `specs/`. If `pr status` or `queue status` is missing, the Work list is derived from the records and the Queues page says "Queues not available". The page updates live through server-sent events when files under `implementation/` or `specs/` change. Routes: `#/work`, `#/item/<feature>` (old `#/pulls` and `#/pull/` links still work), `#/backlog`, `#/queues`, `#/specs`, `#/spec/<id>`, `#/activity`; JSON under `/api/` (`prs`, `queues`, `specs`, `spec/<id>`, `record/<feature>`, `activity`, `meta`, `events`).
 
 ## Local PRs and queues (worktree mode)
 
@@ -307,6 +307,10 @@ From the pilot 0082/0087/0088 run.
 ## Changes in 0.11.2
 
 - Dashboard: a **Backlog** section (`#/backlog`, `/api/backlog`) shows the work no agent has started: ready to start, waiting on other specs (with their current stage), planned but not started (record and plan, no code yet), deferred (with the recorded reason), and decision specs to accept. Each spec shows its kind, requirement count, and wave. The nav count and a link under the pull requests cover the work groups (ready, waiting, planned).
+
+## Changes in 0.12.1
+
+- Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
 
 ## Changes in 0.12.0
 

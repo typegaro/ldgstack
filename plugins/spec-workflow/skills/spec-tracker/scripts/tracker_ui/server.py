@@ -224,26 +224,92 @@ def review_rounds(record: dict[str, Any]) -> int:
     return len(claimed) or int(any(item.get("role") == "reviewer" for item in record.get("checks", [])))
 
 
-def pill(record: dict[str, Any], stage: str) -> dict[str, str]:
+PHASES = {"planning": ("plan", "Planning"), "implementing": ("impl", "Developing"), "review": ("review", "Reviewing"),
+          "test": ("test", "Testing"), "merge": ("merge", "Merging"), "accepted": ("merged", "Done")}
+PHASE_ORDER = ("planning", "implementing", "review", "test", "merge")
+FOUND_IN = {"reviewer": "review", "tester": "test", "merge-queue": "merge"}
+BLOCKED = {"blocked": "blocked", "needs_answer": "needs an answer from you", "needs_tooling": "needs test tooling"}
+
+
+def plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def phase_stage(record: dict[str, Any], stage: str) -> str:
+    """The phase a record is in: fixing a bug stays in the phase that found it (a tester's bug keeps it in Testing)."""
+    if stage in {"accepted", "planning"}:
+        return stage
+    found = [FOUND_IN.get(str(bug.get("found_by")), "implementing") for bug in open_bugs(record)]
+    return max([stage, *found], key=PHASE_ORDER.index)
+
+
+def phase(stage: str) -> dict[str, str]:
+    key, label = PHASES[stage]
+    return {"key": key, "label": label}
+
+
+def activity(record: dict[str, Any], stage: str) -> dict[str, str]:
+    """What is happening inside the phase right now, and its tone (bad: bugs, warn: stuck or waiting on someone)."""
     status, role = str(record.get("status", "")), str(record.get("current_role", ""))
+    bugs = open_bugs(record)
+    fixing = [bug for bug in bugs if bug.get("status") == "fixed"]
     if stage == "accepted":
-        return {"key": "merged", "label": "Merged"}
-    if status == "bugs_found" or (open_bugs(record) and stage != "merge"):
-        return {"key": "bugs", "label": "Bugs found"}
-    if status in {"blocked", "needs_answer", "needs_tooling"}:
-        return {"key": "blocked", "label": {"blocked": "Blocked", "needs_answer": "Needs an answer", "needs_tooling": "Needs tooling"}[status]}
+        return {"label": "merged into main", "tone": ""}
+    if status in BLOCKED:
+        return {"label": BLOCKED[status], "tone": "warn"}
+    if role == "toolsmith":
+        return {"label": "building test tools", "tone": "warn"}
+    if role == "fixer":
+        return {"label": f"fixing {plural(len([bug for bug in bugs if bug.get('status') == 'assigned']) or len(bugs), 'bug')}", "tone": "bad"}
+    if status == "bugs_found" or (bugs and role == "parent"):
+        return {"label": f"{plural(len(bugs), 'bug')} found · waiting for a fixer", "tone": "bad"}
     if stage == "planning":
-        return {"key": "plan", "label": "Planning"}
+        return {"label": "writing the plan" if role == "planner" else "waiting to start", "tone": "" if role == "planner" else "warn"}
     if stage == "review":
-        return {"key": "review", "label": "In review"}
+        what = "the fix" if fixing else "the code"
+        return {"label": f"reviewing {what}", "tone": ""} if role == "reviewer" else {"label": f"waiting for a reviewer ({what})", "tone": "warn"}
     if stage == "test":
-        return {"key": "test", "label": "Testing"} if role == "tester" else {"key": "waitTest", "label": "Waiting for test"}
+        what = "retesting the fix" if fixing or status == "ready_for_retest" else "testing"
+        return {"label": what, "tone": ""} if role == "tester" else {"label": f"waiting for a test slot ({what.split()[0]})", "tone": "warn"}
     if stage == "merge":
-        return {"key": "merge", "label": "Ready to merge"}
+        return {"label": "ready to merge", "tone": ""}
+    if role != "implementer":
+        return {"label": "plan ready · waiting for a developer" if status == "plan_ready" else "waiting for the orchestrator", "tone": "warn"}
     batches = len(((record.get("plans") or [{}])[-1]).get("batches", []))
     current = [item.get("batch") for item in active_assignments(record) if item.get("batch")]
-    suffix = f" · batch {current[0]}/{batches}" if current and batches else ""
-    return {"key": "impl", "label": "Implementing" + suffix}
+    return {"label": "writing code" + (f" · batch {current[0]}/{batches}" if current and batches else ""), "tone": ""}
+
+
+def merge_steps(row: dict[str, Any], merge_queue: dict[str, Any] | None) -> tuple[list[dict[str, str]], str]:
+    """What a record ready to merge is waiting for, step by step, and a one-line summary."""
+    steps = [{"state": "done", "text": "Reviewed, tested and through the acceptance gate"}]
+    problems = [f"Conflicts with main in {repo}: {', '.join(info['conflicts'])}" for repo, info in (row.get("repos") or {}).items()
+                if isinstance(info, dict) and info.get("conflicts")]
+    problems += [str(item) for item in row.get("blocking") or [] if not str(item).startswith("conflict")]
+    steps += [{"state": "blocked", "text": text} for text in problems]
+    queue = merge_queue or {}
+    holders = [item.get("feature") for item in queue.get("holders", [])]
+    waiting = [item.get("feature") for item in queue.get("waiting", [])]
+    ci = row.get("fast_ci") or {}
+    if row["feature"] in holders:
+        steps.append({"state": "done", "text": "Queued to merge"})
+        running = ci.get("result") == "running"
+        steps.append({"state": "now", "text": "Merging now: rebasing on main and running fast CI" + (" (CI running)" if running else "")})
+        summary = "merging now"
+    elif row["feature"] in waiting:
+        ahead = holders + waiting[:waiting.index(row["feature"])]
+        steps.append({"state": "now", "text": f"In the merge queue behind {plural(len(ahead), 'item')}: " + ", ".join(f"#{item[:4]}" for item in ahead)
+                      if ahead else "Next in the merge queue"})
+        summary = f"queued to merge · {len(ahead)} ahead" if ahead else "next to merge"
+    else:
+        steps.append({"state": "now", "text": "Waiting for the orchestrator to add it to the merge queue (tracker queue add merge)"})
+        summary = "waiting to be queued for merge"
+    if ci.get("result") == "failed" and row["feature"] not in holders:
+        steps.append({"state": "blocked", "text": "The last fast-CI run failed"})
+    steps.append({"state": "todo", "text": "Merged into main"})
+    if problems:
+        summary = "blocked: " + problems[0][:60]
+    return steps, summary
 
 
 def derive_pr(project: Project, entry: dict[str, Any], spec: dict[str, Any] | None) -> dict[str, Any]:
@@ -251,6 +317,7 @@ def derive_pr(project: Project, entry: dict[str, Any], spec: dict[str, Any] | No
     feature = record["feature"]
     merged_at = merged_time(project, entry)
     stage = record_stage(str(record.get("status", "")), str(record.get("current_role", "")))
+    current = phase_stage(record, stage)
     worktree = record.get("worktree") or {}
     repos: dict[str, Any] = {}
     for repo in worktree.get("repos", []) if not worktree.get("removed_at") else []:
@@ -266,7 +333,7 @@ def derive_pr(project: Project, entry: dict[str, Any], spec: dict[str, Any] | No
         "state": "merged" if merged_at else "open", "opened_at": record.get("created_at"), "merged_at": merged_at,
         "updated_at": record.get("updated_at"),
         "record_status": record.get("status"), "current_role": record.get("current_role"), "model": None,
-        "stage": stage, "pill": pill(record, stage), "risk": record.get("risk", "normal"),
+        "stage": current, "phase": phase(current), "now": activity(record, stage), "risk": record.get("risk", "normal"),
         "repos": repos, "fast_ci": None, "queue": None, "review_rounds": review_rounds(record),
         "checks": {"passed": sum(1 for item in checks if item.get("result") == "passed"),
                    "failed": sum(1 for item in checks if item.get("result") == "failed"), "total": len(checks)},
@@ -293,14 +360,20 @@ def build_prs(project: Project) -> dict[str, Any]:
             if not isinstance(item, dict) or not FEATURE_ID.match(str(item.get("feature", ""))):
                 continue
             row = rows.setdefault(item["feature"], {"feature": item["feature"], "spec_id": item["feature"][:4], "title": item["feature"],
-                                                    "pill": {"key": "impl", "label": "Open"}, "stage": "implementing", "bugs": {"open": 0}})
+                                                    "phase": phase("implementing"), "now": {"label": "open", "tone": ""},
+                                                    "stage": "implementing", "bugs": {"open": 0}})
             row.update({key: value for key, value in item.items() if value is not None and key not in {"title", "review_rounds"}})
             if item.get("title"):
                 row["title"] = item["title"]
             if isinstance(item.get("review_rounds"), int):
                 row["review_rounds"] = item["review_rounds"]
             if item.get("state") == "merged" and row.get("stage") != "accepted":
-                row["stage"], row["pill"] = "accepted", {"key": "merged", "label": "Merged"}
+                row["stage"], row["phase"], row["now"] = "accepted", phase("accepted"), {"label": "merged into main", "tone": ""}
+        merge_queue = ((project.queue_status() or {}).get("queues") or {}).get("merge")
+        for row in rows.values():
+            if row.get("state") == "open" and row.get("stage") == "merge" and row["now"]["tone"] != "warn":
+                row["merge_steps"], summary = merge_steps(row, merge_queue)
+                row["now"] = {"label": summary, "tone": "bad" if summary.startswith("blocked") else ""}
         ordered = sorted(rows.values(), key=lambda item: str(item.get("merged_at") or item.get("updated_at") or ""), reverse=True)
         return {"prs": ordered, "source": "pr status" if status else "records", "pr_status_available": status is not None}
     return project.cached("prs", build)
@@ -326,7 +399,7 @@ def build_queues(project: Project) -> dict[str, Any]:
                                "batch": item.get("batch"), "claimed_at": item.get("at")})
             slot = {"review": "review", "test": "test", "merge": "merge"}.get(row["stage"])
             if slot:
-                queues[slot]["waiting" if row["pill"]["key"] in {"waitTest", "merge"} else "holders"].append(
+                queues[slot]["waiting" if slot == "merge" or not row.get("running") else "holders"].append(
                     {"feature": row["feature"], "class": "default", "since": row.get("updated_at"), "position": None})
         return {"available": False, "source": "records", "queues": queues, "agents": agents, "counters": counters}
     return project.cached("queues", build)
@@ -367,7 +440,8 @@ def spec_stage(spec: dict[str, Any], entry: dict[str, Any] | None, ready: set[in
     if spec["status"] == "deferred":
         return "deferred"
     if entry and entry["location"] == "active":
-        return record_stage(str(entry["record"].get("status", "")), str(entry["record"].get("current_role", "")))
+        record = entry["record"]
+        return phase_stage(record, record_stage(str(record.get("status", "")), str(record.get("current_role", ""))))
     if spec["status"] in {"accepted", "superseded"}:
         return "accepted"
     if spec["status"] == "in_progress":

@@ -3,8 +3,8 @@
    Every piece of data reaches the DOM through textContent or attributes, never innerHTML. */
 
 const STAGES = [
-  ["draft", "Draft"], ["ready", "Ready"], ["planning", "Planning"], ["implementing", "Implementing"], ["review", "In review"],
-  ["test", "Testing"], ["merge", "Merge queue"], ["accepted", "Accepted"], ["deferred", "Deferred"],
+  ["draft", "Draft"], ["ready", "Ready"], ["planning", "Planning"], ["implementing", "Developing"], ["review", "Reviewing"],
+  ["test", "Testing"], ["merge", "Merging"], ["accepted", "Done"], ["deferred", "Deferred"],
 ];
 const STAGE_PILL = { implementing: "impl", planning: "plan", review: "review", test: "test", merge: "merge", accepted: "accepted", draft: "draft", ready: "ready", deferred: "deferred" };
 const STAGE_LABEL = Object.fromEntries(STAGES);
@@ -107,12 +107,17 @@ const prByFeature = (feature) => prList().find((pr) => pr.feature === feature);
 
 // Shared pieces -------------------------------------------------------------------------------------------
 
-function pillFor(pr) {
+/** The phase chip (where the work is) and what is happening in it right now. */
+function phaseChip(pr, cls) {
+  return lbl(pr.phase.label, (cls || "") + " pill-" + pr.phase.key);
+}
+
+function nowText(pr) {
+  const now = pr.now || { label: "", tone: "" };
+  let label = now.label;
   const queue = pr.queue;
-  let label = pr.pill.label;
-  if (pr.pill.key === "waitTest" && queue && queue.name === "test" && queue.position) label += ` · #${queue.position}`;
-  if (pr.pill.key === "merge" && queue && queue.name === "merge" && queue.position) label = `Queued to merge · #${queue.position}`;
-  return lbl(label, "pill-" + pr.pill.key);
+  if (/waiting for a test slot/.test(label) && queue && queue.name === "test" && queue.position) label += ` · #${queue.position} in line`;
+  return span("now " + (now.tone ? "t-" + now.tone : "meta"), label);
 }
 
 function repoArea(pr) {
@@ -160,13 +165,13 @@ function renderNav(route) {
   nav.replaceChildren();
   const agents = store.queues ? store.queues.agents.length : 0;
   const items = [
-    ["pulls", "#/pulls", ["Pull requests", "PRs"], store.prs ? openPrs().length : null],
+    ["work", "#/work", "Work", store.prs ? openPrs().length : null],
     ["backlog", "#/backlog", "Backlog", store.backlog ? store.backlog.todo : null],
     ["queues", "#/queues", "Queues", store.queues ? agents : null],
     ["specs", "#/specs", "Specs", store.specs ? store.specs.specs.length : null],
     ["activity", "#/activity", "Activity", null],
   ];
-  const section = { pull: "pulls", spec: "specs" }[route.name] || route.name;
+  const section = { item: "work", spec: "specs" }[route.name] || route.name;
   for (const [id, href, text, count] of items) {
     const [long, short] = Array.isArray(text) ? text : [text, text];
     const a = h("a", { href, "aria-label": long }, span("long", long), short !== long ? span("short", short) : null, count === null ? null : lbl(String(count)));
@@ -190,9 +195,12 @@ function renderLive() {
 
 // Routes --------------------------------------------------------------------------------------------------
 
+const ROUTE_ALIASES = { pulls: "work", pull: "item" };  // links from before the rename
+
 function parseRoute() {
-  const parts = (location.hash.replace(/^#\/?/, "") || "pulls").split("/").map(decodeURIComponent);
-  return { name: parts[0] || "pulls", arg: parts[1] || "" };
+  const parts = (location.hash.replace(/^#\/?/, "") || "work").split("/").map(decodeURIComponent);
+  const name = parts[0] || "work";
+  return { name: ROUTE_ALIASES[name] || name, arg: parts[1] || "" };
 }
 
 // Sideways-scrolling areas whose position survives a live re-render (matched by order on the page).
@@ -217,7 +225,7 @@ async function render(options = {}) {
   try {
     await loadBase();
     let content;
-    if (route.name === "pull" && route.arg) content = await pullView(route.arg);
+    if (route.name === "item" && route.arg) content = await pullView(route.arg);
     else if (route.name === "spec" && route.arg) content = await specView(route.arg);
     else if (route.name === "queues") content = queuesView();
     else if (route.name === "backlog") content = backlogView();
@@ -234,7 +242,7 @@ async function render(options = {}) {
       // On a phone the section strip scrolls sideways: keep the current section visible.
       document.querySelector('#nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
     } else restoreScroll(kept);
-    document.title = `${route.name === "pulls" ? "Pull requests" : route.name[0].toUpperCase() + route.name.slice(1)} · ldgstack / spec-workflow`;
+    document.title = `${route.name === "item" ? route.arg : route.name[0].toUpperCase() + route.name.slice(1)} · ldgstack / spec-workflow`;
   } catch (error) {
     if (token !== view.token) return;
     app.replaceChildren(h("div", { class: "banner", role: "alert", text: `Could not load: ${error.message}` }));
@@ -263,7 +271,7 @@ function tabBar(tabs, label, rerender) {
   return bar;
 }
 
-// Pull requests -------------------------------------------------------------------------------------------
+// Work: one row per implementation record (in progress or done) ---------------------------------------------
 
 function pullsView() {
   const root = h("div");
@@ -276,9 +284,9 @@ function pullsView() {
 }
 
 function pullsParts(prs, redraw) {
-  const search = h("input", { id: "pr-filter", type: "text", value: view.prFilter, placeholder: "Filter by title, number, branch or role", autocomplete: "off",
+  const search = h("input", { id: "pr-filter", type: "text", value: view.prFilter, placeholder: "Filter by title, number, branch, role or status", autocomplete: "off",
     oninput: (e) => { view.prFilter = e.target.value; updateList(); } });
-  const statusSelect = select("pr-status", "Status", [["", "Status: all"], ...[...new Set(prs.map((p) => p.pill.key + "|" + p.pill.label.split(" · ")[0]))].map((v) => v.split("|"))], view.prStatus,
+  const statusSelect = select("pr-status", "Phase", [["", "Phase: all"], ...[...new Set(prs.map((p) => p.phase.key + "|" + p.phase.label))].map((v) => v.split("|"))], view.prStatus,
     (v) => { view.prStatus = v; updateList(); });
   const areas = [...new Set(prs.map(repoArea))];
   const areaSelect = select("pr-area", "Area", [["", "Area: all"], ...areas.map((a) => [a, a])], view.prArea, (v) => { view.prArea = v; updateList(); });
@@ -290,24 +298,24 @@ function pullsParts(prs, redraw) {
     h("span", { class: "dot dot-" + (state === "open" ? "impl" : "merged") }), `${list.length} ${text}`);
   const list = h("div");
   const box = h("div", { class: "box" },
-    h("div", { class: "box-head" }, toggle("open", "Open", open), toggle("merged", "Merged", merged), h("span", { class: "grow" }),
+    h("div", { class: "box-head" }, toggle("open", "In progress", open), toggle("merged", "Done", merged), h("span", { class: "grow" }),
       span("meta col", "Checks"), span("meta col", "Review"), span("meta col narrow", "Bugs")), list);
   function updateList() {
     const needle = view.prFilter.trim().toLowerCase();
     const rows = (view.prState === "open" ? open : merged).filter((pr) => {
-      if (view.prStatus && pr.pill.key !== view.prStatus) return false;
+      if (view.prStatus && pr.phase.key !== view.prStatus) return false;
       if (view.prArea && repoArea(pr) !== view.prArea) return false;
-      const hay = `${pr.title} ${pr.spec_id} ${pr.feature} ${pr.current_role || ""} ${pr.pill.label}`.toLowerCase();
+      const hay = `${pr.title} ${pr.spec_id} ${pr.feature} ${pr.current_role || ""} ${pr.phase.label} ${(pr.now || {}).label || ""}`.toLowerCase();
       return !needle || needle.split(/\s+/).every((word) => hay.includes(word));
     });
-    list.replaceChildren(...(rows.length ? rows.map(prRow) : [emptyBox(view.prState === "open" ? "No open pull requests." : "No merged pull requests.")]));
+    list.replaceChildren(...(rows.length ? rows.map(prRow) : [emptyBox(view.prState === "open" ? "Nothing in progress." : "Nothing merged yet.")]));
   }
   updateList();
   const todo = store.backlog ? store.backlog.todo : 0;
   const note = h("p", { class: "meta" }, "Updates live from implementation/ and the git worktrees. Read-only: actions stay in the CLI.",
     todo ? [" ", link("#/backlog", `${todo} spec${todo === 1 ? "" : "s"} not started yet →`)] : null);
   const banner = store.prs && !store.prs.pr_status_available
-    ? h("p", { class: "banner", text: "Pull request data comes from the implementation records (no `pr status` command in this tracker yet), so branch diff stats and fast-CI results are not shown." })
+    ? h("p", { class: "banner", text: "Work data comes from the implementation records (no `pr status` command in this tracker yet), so branch diff stats and fast-CI results are not shown." })
     : null;
   return [banner, toolbar, box, note];
 }
@@ -328,16 +336,16 @@ function prRow(pr) {
   const branch = Object.values(pr.repos || {}).map((r) => r.branch).find(Boolean) || pr.feature;
   const stamp = pr.state === "merged" ? "merged " + ago(pr.merged_at) : "updated " + ago(pr.updated_at);
   return h("div", { class: "row" },
-    h("span", { class: "dot dot-" + pr.pill.key, "aria-hidden": "true" }),
+    h("span", { class: "dot dot-" + pr.phase.key, "aria-hidden": "true" }),
     h("div", { class: "main" },
-      h("div", { class: "titleline" }, link("#/pull/" + encodeURIComponent(pr.feature), pr.title, "title"), pillFor(pr), lbl(repoArea(pr)),
-        pr.risk === "high" ? lbl("high risk", "warn") : null, conflicts(pr) ? lbl("conflicts with main", "bad") : null),
+      h("div", { class: "titleline" }, link("#/item/" + encodeURIComponent(pr.feature), pr.title, "title"), phaseChip(pr), pr.state === "open" ? nowText(pr) : null,
+        lbl(repoArea(pr)), pr.risk === "high" ? lbl("high risk", "warn") : null, conflicts(pr) ? lbl("conflicts with main", "bad") : null),
       span("meta", `#${pr.spec_id} · ${branch} · ${stamp}${pr.current_role && pr.state === "open" ? " · " + pr.current_role + (pr.model ? ` (${pr.model})` : "") : ""}`)),
     h("div", { class: "cols" }, h("span", { class: "col " + ciClass, "data-label": "Checks", text: ci }),
       h("span", { class: "col", "data-label": "Review", text: reviewCell(pr) }), h("span", { class: "col narrow " + bugClass, "data-label": "Bugs", text: bugs })));
 }
 
-// Pull request detail -------------------------------------------------------------------------------------
+// Work item detail ----------------------------------------------------------------------------------------
 
 async function pullView(feature) {
   const data = await api("/api/record/" + encodeURIComponent(feature));
@@ -359,14 +367,15 @@ function pullParts(data, pr, redraw) {
   const fileCount = repos.reduce((n, [, r]) => n + (r.files || 0), 0) || files.reduce((n, [, list]) => n + list.length, 0);
   const tabs = [["conv", "Conversation", data.timeline.length], ["checks", "Checks", data.checks.length], ["reqs", "Requirements", data.requirements.length],
     ["bugs", "Bugs", data.bugs.length], ["files", "Files changed", fileCount], ["plan", "Plan", data.plan ? data.plan.batches.length : 0]];
-  const bar = tabBar(tabs, "Pull request sections", redraw);
+  const bar = tabBar(tabs, "Work item sections", redraw);
   const branch = repos.map(([, r]) => r.branch).find(Boolean) || data.feature;
   const head = [
     h("h1", { class: "page" }, pr.title, " ", span("num", "#" + pr.spec_id)),
-    h("div", { class: "subline" }, lbl(pr.pill.label, "big solid pill-" + pr.pill.key),
+    h("div", { class: "subline" }, phaseChip(pr, "big solid"), pr.state === "open" ? nowText(pr) : null,
       h("span", { class: "meta" }, span("mono-soft", branch), " → ", span("mono-soft", "main"), repos.map(([name, repo]) => repoStat(name, repo)),
         repos.length ? (conflicts(pr) ? " · conflicts with main" : " · no conflicts") : null),
       pr.risk === "high" ? lbl("high risk", "warn") : null, link("#/spec/" + pr.spec_id, "Spec #" + pr.spec_id)),
+    pr.state === "open" && pr.merge_steps ? mergeSteps(pr.merge_steps) : null,
   ];
   let body;
   if (view.tab === "conv") body = conversation(data);
@@ -376,6 +385,14 @@ function pullParts(data, pr, redraw) {
   else if (view.tab === "files") body = filesTab(pr, data);
   else body = planTab(data);
   return [...head, bar, h("div", { class: "layout" }, h("section", { class: "content", "aria-label": "Details" }, body), prSidebar(data, pr))];
+}
+
+const STEP_MARKS = { done: "✓", now: "●", blocked: "✗", todo: "○" };
+
+function mergeSteps(steps) {
+  return h("section", { class: "box steps", "aria-label": "What the merge is waiting for" },
+    h("div", { class: "box-head" }, h("strong", { text: "Waiting for" })),
+    h("ol", {}, steps.map((step) => h("li", { class: "step-" + step.state }, span("mark", STEP_MARKS[step.state] || "•"), span("", step.text)))));
 }
 
 function conversation(data) {
@@ -465,11 +482,11 @@ function prSidebar(data, pr) {
   const bar = h("div", { class: "bar", role: "img", "aria-label": `${reqs.implemented} of ${reqs.total} implemented, ${reqs.tested} tested` },
     h("span", { class: "a", style: `width:${(reqs.tested / total) * 100}%` }), h("span", { class: "b", style: `width:${((reqs.implemented - reqs.tested) / total) * 100}%` }));
   const running = side.running.length ? side.running.map((r) => span("", `${r.role}${r.batch ? " · batch " + r.batch : ""} · ${dur(since(r.since))}`))
-    : [span("t-muted", pr.state === "merged" ? "merged" : "nothing running")];
+    : [span("t-muted", pr.state === "merged" ? "merged" : "no agent running")];
   const finders = Object.entries(side.bugs_by_finder).map(([f, n]) => `${n} by ${f}`).join(" · ");
   const fixed = side.bugs_by_status.verified || 0;
   return h("aside", { "aria-label": "Summary" },
-    h("div", { class: "side" }, h("h2", { text: "Now" }), running, pr.queue && pr.queue.name ? span("meta", `${pr.queue.name} queue${pr.queue.position ? " #" + pr.queue.position : ""}`) : null),
+    h("div", { class: "side" }, h("h2", { text: "Now" }), h("span", {}, phaseChip(pr), " ", pr.state === "open" ? nowText(pr) : null), running, pr.queue && pr.queue.name ? span("meta", `${pr.queue.name} queue${pr.queue.position ? " #" + pr.queue.position : ""}`) : null),
     h("div", { class: "side" }, h("h2", { text: "Requirements" }), bar, span("meta", `${reqs.implemented} implemented · ${reqs.tested} tested of ${reqs.total}`)),
     h("div", { class: "side" }, h("h2", { text: "Bugs" }), h("span", {}, span("t-good", `${fixed} fixed`), " · ", span(pr.bugs.open ? "t-bad" : "t-muted", `${pr.bugs.open} open`)),
       finders ? span("meta", finders) : null),
@@ -488,7 +505,7 @@ function queuesView() {
     const pr = prByFeature(feature);
     return `#${feature.slice(0, 4)} ${pr ? pr.title : feature}`;
   };
-  const featureLink = (feature) => link("#/pull/" + encodeURIComponent(feature), titleOf(feature));
+  const featureLink = (feature) => link("#/item/" + encodeURIComponent(feature), titleOf(feature));
   const card = (key, title, extra) => {
     const data = q.queues[key] || { slots: {}, holders: [], waiting: [] };
     const classes = Object.keys(data.slots || {});
@@ -499,7 +516,7 @@ function queuesView() {
       ...data.waiting.map((x, i) => h("div", { class: "item" }, span("meta pos", String(x.position || i + 1)), featureLink(x.feature),
         span("meta", `waiting ${dur(since(x.since))}`))),
     ];
-    if (!items.length) items.push(h("div", { class: "item" }, span("meta", key === "review" ? "No PRs waiting for review" : "Nothing queued")));
+    if (!items.length) items.push(h("div", { class: "item" }, span("meta", key === "review" ? "Nothing waiting for review" : "Nothing queued")));
     return h("section", { class: "card", "aria-labelledby": "q-" + key }, h("div", { class: "card-head", id: "q-" + key }, title,
       data.holders.length && !classes.length ? lbl(`${data.holders.length} running`) : null, chips, extra && extra(data)), items);
   };
@@ -508,8 +525,8 @@ function queuesView() {
   const cards = h("div", { class: "cards" }, card("review", "Review"), card("test", "Test"),
     card("merge", "Merge", (d) => [waitingForMerge(d), mergeLast(d)]));
   const mergeCard = cards.lastChild;
-  mergeCard.append(h("div", { class: "item" }, span("meta", `After merge: re-check ${openPrs().length} open PRs for conflicts`)));
-  const rows = q.agents.map((a) => h("tr", {}, h("td", { text: a.role }), h("td", {}, link("#/pull/" + encodeURIComponent(a.feature), "#" + a.feature.slice(0, 4))),
+  mergeCard.append(h("div", { class: "item" }, span("meta", `After a merge: re-check ${openPrs().length} items in progress for conflicts`)));
+  const rows = q.agents.map((a) => h("tr", {}, h("td", { text: a.role }), h("td", {}, link("#/item/" + encodeURIComponent(a.feature), "#" + a.feature.slice(0, 4))),
     h("td", { text: a.model || "–" }), h("td", { class: "mono-soft", text: a.assignment + (a.batch ? ` · batch ${a.batch}` : "") }),
     h("td", { text: a.claimed_at ? new Date(a.claimed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "–" }),
     h("td", { text: dur(since(a.claimed_at)) })));
@@ -662,7 +679,7 @@ function specSidebar(data) {
       s.status === "superseded" ? [" ", lbl("superseded")] : null)) : span("meta", empty));
   const pr = data.pr;
   const impl = h("div", { class: "side" }, h("h2", { text: "Implementation" }),
-    pr ? [h("span", {}, link("#/pull/" + encodeURIComponent(pr.feature), "Pull request #" + pr.spec_id), " ", lbl(pr.state === "merged" ? "merged" : "open", pr.state === "merged" ? "violet" : "")),
+    pr ? [h("span", {}, link("#/item/" + encodeURIComponent(pr.feature), "Work #" + pr.spec_id), " ", phaseChip(pr)),
       span("meta", `${pr.review_rounds} review rounds · ${(pr.bugs && pr.bugs.total) || 0} bugs`)] : span("meta", "No implementation record yet"));
   return h("aside", { "aria-label": "Spec links" }, impl, group("Depends on", links.depends_on, "none"), group("Amends", links.amends, "none"),
     group("References", links.references, "none"), group("Amended by", links.amended_by, "none yet"),
@@ -676,7 +693,7 @@ async function activityView() {
   if (!data.events.length) return emptyBox("No activity yet.");
   const box = h("div", { class: "box" });
   for (const event of data.events) {
-    const target = event.kind === "spec" ? "#/spec/" + Number(event.feature.slice(0, 4)) : "#/pull/" + encodeURIComponent(event.feature);
+    const target = event.kind === "spec" ? "#/spec/" + Number(event.feature.slice(0, 4)) : "#/item/" + encodeURIComponent(event.feature);
     box.append(h("div", { class: "row" }, h("span", { class: "ev-icon ev-" + event.kind, "aria-hidden": "true", text: EVENT_ICONS[event.kind] || "•" }),
       h("div", { class: "main" }, h("span", {}, link(target, event.feature, "title"), " ", span("meta", `${event.who} ${event.what}`)), event.note ? span("meta", event.note) : null),
       when(event.at)));

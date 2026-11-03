@@ -57,6 +57,7 @@ class DashboardTest(CliTestCase):
         data = self.get("/api/prs")
         row = next(item for item in data["prs"] if item["feature"] == FEATURE)
         self.assertEqual((row["state"], row["stage"], row["spec_id"]), ("open", "implementing", "0000"))
+        self.assertEqual((row["phase"]["label"], row["now"]["label"]), ("Developing", "writing code"))
         self.assertEqual(row["requirements"], {"total": 1, "implemented": 1, "tested": 0})
         self.assertEqual(row["bugs"]["open"], 0)
         self.assertIn("pr_status_available", data)
@@ -156,6 +157,28 @@ class DashboardTest(CliTestCase):
 class HelperTest(unittest.TestCase):
     def test_ids_of_accepts_mixed_shapes(self) -> None:
         self.assertEqual(server.ids_of([1, {"id": 2}, [3, {"id": 4}], "x", True]), [1, 2, 3, 4])
+
+    def test_a_bug_keeps_the_phase_that_found_it(self) -> None:
+        tester_bug = {"found_by": "tester", "status": "assigned"}
+        fixing = {"status": "fixing", "current_role": "fixer", "bugs": [tester_bug]}
+        stage = server.record_stage("fixing", "fixer")
+        self.assertEqual(server.phase(server.phase_stage(fixing, stage))["label"], "Testing")
+        self.assertEqual(server.activity(fixing, stage), {"label": "fixing 1 bug", "tone": "bad"})
+        found = {"status": "bugs_found", "current_role": "parent", "bugs": [{**tester_bug, "status": "open"}]}
+        self.assertEqual(server.phase_stage(found, server.record_stage("bugs_found", "parent")), "test")
+        own = {"status": "in_progress", "current_role": "implementer", "bugs": [{"found_by": "implementer", "status": "open"}]}
+        self.assertEqual(server.phase_stage(own, "implementing"), "implementing")
+
+    def test_merge_steps_say_what_the_merge_waits_for(self) -> None:
+        row = {"feature": "0002-b", "repos": {}, "fast_ci": None}
+        queue = {"holders": [{"feature": "0001-a"}], "waiting": [{"feature": "0002-b"}]}
+        steps, summary = server.merge_steps(row, queue)
+        self.assertEqual(summary, "queued to merge · 1 ahead")
+        self.assertIn("#0001", next(step["text"] for step in steps if step["state"] == "now"))
+        self.assertEqual(server.merge_steps(row, {})[1], "waiting to be queued for merge")
+        self.assertEqual(server.merge_steps({**row, "fast_ci": {"result": "running"}}, {"holders": [{"feature": "0002-b"}]})[1], "merging now")
+        blocked = server.merge_steps({**row, "repos": {"be": {"conflicts": ["a.go"]}}}, {})
+        self.assertTrue(blocked[1].startswith("blocked: Conflicts with main in be"))
 
     def test_time_helpers(self) -> None:
         self.assertEqual(server.seconds_between("2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"), 3600)
