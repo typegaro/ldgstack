@@ -10,6 +10,7 @@ Invoke it as `python3 <this skill's base directory>/scripts/spec.py` (or the plu
 ```bash
 spec new --title T --kind K [--slug S] [--depends-on 1,2] [--amends 6] [--supersedes 3] [--references 0,2] [--from specs/.drafts/F.md]
 spec list [--kind K] [--status S] | status | ready | next | waves | next-number | validate [--strict-testability] | preflight
+spec later [--all] | risks [--all]
 spec show <id> [--effective] | log <id> | graph [--mermaid]
 spec archive <id> --parent-confirmed
 spec restore <id> --reason R --parent-confirmed
@@ -25,6 +26,8 @@ spec adopt --parent-confirmed [--dry-run] [--assign <stem>=<kind> ...] [--baseli
 `waves` (scheduling, `--json` for machines) lists `startable` (= `ready`), `plannable` (draft specs whose unaccepted dependencies are all in progress or startable, with `blocked_on`; candidates for `tracker init --early`), `waves` (topological levels of every remaining non-decision spec), and `deferred` (shown separately, in no other list).
 
 `defer <id> --reason R` parks a draft spec: a derived `deferred` status recorded in the manifest history (like `unlock`/`relock`; the spec file is untouched), so `ready`, `next` and `waves` skip it, `list` shows `[deferred]`, `tracker init` refuses it, and it stays a valid link target. `undefer` reverses it. Only drafts can be deferred.
+
+`later` lists the open `- **L<n>**` (defined later) items and `risks` the open `- **A<n>**` (accepted risk) items across specs: `ref` (`1:L2`), title (before the colon), detail, spec, spec status, line. An item is resolved once any newer spec has a line `Resolves 1:L2` (several refs per line are fine); `--all` adds resolved items (with `resolved_by`) and items of superseded specs. Code fences are skipped. `status` counts the open ones. `validate` fails on a duplicate item id in a spec, or a `Resolves` that names a missing item or a spec that isn't older.
 
 `new`, `edit`, `archive`, `restore`, `unlock`, `relock`, `defer`, `undefer`, `promote`, and `adopt` are parent-only; the hook denies them to subagents.
 
@@ -80,6 +83,7 @@ Accepted specs are frozen: the hook blocks edits, and `validate` fails on a hash
 - One requirement per bullet: `- **R<n>** [optional tag] text`. Tags: `[security]`, `[data]`, `[ux]`, `[api]`, `[perf]`, `[ops]`.
 - Number sequentially within the spec. Cross-reference as `<id>:R<n>` (e.g. `6:R3`).
 - Once a spec is accepted, its IDs are permanent. A newer spec starts its requirement with `(replaces 6:R3)` or `(removes 6:R4)`.
+- `- **L<n>**` and `- **A<n>**` bullets are defined-later and accepted-risk items, not requirements (see write-specs).
 
 ## Adopt (one-time legacy migration)
 

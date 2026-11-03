@@ -64,7 +64,14 @@ For a `feature`/`change` spec with state, a UI flow, or an integration ([write-s
 - Each tool is reusable: a generic command with subcommands, flags, JSON output, and `--help`, registered in the toolkit with a smoke test. Ask: could a different tester reuse this tool for a new scenario without editing it? A one-off script, test procedure, or fixture-bound program is a finding.
 - A missing section, or `Not applicable` on a spec that adds state, is a High finding.
 
-### 8. Test implementability
+### 8. Check defined-later and accepted-risk items
+
+- A "defined later" answer becomes an `- **L<n>** <suggested title>: <what is left open>` item in the spec, never free text. Before suggesting one, check that the spec's requirements stand without the answer; if one depends on it, it is a missing decision (High), not an `L` item.
+- An explicitly accepted risk becomes an `- **A<n>**` item with behavior, consequence, and revisit trigger (`write-specs`). Free-text "defined later", "TBD", or accepted-risk prose is a Low finding: it can't be queried.
+- A spec with a `Resolves <id>:<item>` line must answer what that item left open, or add its own `L` item for the rest.
+- Run `spec risks` and check whether the reviewed work reaches any revisit trigger.
+
+### 9. Test implementability
 
 For each feature, ask: could two engineers independently implement this and produce compatible behavior without making product decisions? If not, identify the exact missing decision.
 
@@ -88,8 +95,8 @@ Lead with a direct readiness verdict. Then provide:
 3. Separate sections for database, abstractions, API/security, runtime lifecycle, and structure when relevant.
 4. A short list of strengths worth preserving.
 5. A recommended specification order or next decisions when dependencies are incorrect.
-6. A complete decision-question list, grouped by topic, when user input is needed.
+6. A complete decision-question list, grouped by topic, when user input is needed. For each question you may suggest "define later" with a proposed `L` item title, and "accept the risk" with a proposed `A` item, but only the user chooses.
 
 Keep the report concise. Avoid repeating the specification, listing harmless omissions, or presenting personal preferences as defects.
 
-Do not treat a reported risk as accepted. Only an explicit user decision can accept a risk, and accepted risks must be recorded through the `write-specs` workflow.
+Do not treat a reported risk as accepted. Only an explicit user decision can accept a risk, and accepted risks are recorded as `A<n>` items through the `write-specs` workflow.

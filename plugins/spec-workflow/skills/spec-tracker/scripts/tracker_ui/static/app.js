@@ -588,6 +588,11 @@ const BACKLOG = [
   ["decisions", "Decisions to accept", "Accepted-risk specs: recorded, never implemented.", "draft"],
 ];
 
+const ITEM_GROUPS = [
+  ["later", "To define", 'Flagged as defined later in a spec. Start one with write-specs; the new spec says "Resolves <spec>:L<n>".'],
+  ["risks", "Accepted risks", 'Risks a spec accepted. Address one with a new spec that says "Resolves <spec>:A<n>".'],
+];
+
 function backlogView() {
   const data = store.backlog;
   const sections = BACKLOG.filter(([key]) => data.groups[key].length).map(([key, title, help, pill]) =>
@@ -596,8 +601,25 @@ function backlogView() {
       data.groups[key].map((spec) => backlogRow(spec, pill))));
   const total = BACKLOG.reduce((n, [key]) => n + data.groups[key].length, 0);
   const summary = h("p", { class: "meta" }, `${data.todo} spec${data.todo === 1 ? "" : "s"} of work not started`,
-    data.counts.deferred ? ` · ${data.counts.deferred} deferred` : "", data.counts.decisions ? ` · ${data.counts.decisions} decision${data.counts.decisions === 1 ? "" : "s"}` : "");
-  return h("div", { class: "stack" }, summary, total ? sections : emptyBox("Every spec has been picked up. Write a new one with write-specs."));
+    data.counts.deferred ? ` · ${data.counts.deferred} deferred` : "", data.counts.decisions ? ` · ${data.counts.decisions} decision${data.counts.decisions === 1 ? "" : "s"}` : "",
+    ` · ${(data.later || []).length} to define · ${(data.risks || []).length} accepted risk${(data.risks || []).length === 1 ? "" : "s"}`);
+  const specs = h("section", { class: "stack", "aria-labelledby": "bl-specs" }, h("h2", { class: "group-title", id: "bl-specs", text: "Draft specs" }),
+    total ? sections : emptyBox("Every spec has been picked up. Write a new one with write-specs."));
+  const items = ITEM_GROUPS.map(([key, title, help]) => {
+    const rows = data[key] || [];
+    return h("section", { class: "stack", "aria-labelledby": "bl-" + key }, h("h2", { class: "group-title", id: "bl-" + key }, title, " ", lbl(String(rows.length))),
+      rows.length ? h("div", { class: "box" }, h("div", { class: "box-head" }, span("meta", help)), rows.map(itemRow)) : emptyBox(`Nothing ${key === "later" ? "to define" : "accepted"} is open.`));
+  });
+  return h("div", { class: "stack" }, summary, specs, items);
+}
+
+function itemRow(item) {
+  return h("div", { class: "row" }, h("span", { class: "dot dot-" + (item.type === "risk" ? "bugs" : "draft"), "aria-hidden": "true" }),
+    h("div", { class: "main" },
+      h("div", { class: "titleline" }, h("span", { class: "title", text: item.title || item.id }), span("meta", `${specLabel(item.spec)}:${item.id}`)),
+      item.detail ? span("", item.detail) : null,
+      h("span", { class: "meta" }, "From ", link("#/spec/" + item.spec, `#${specLabel(item.spec)} ${item.spec_title}`), " ",
+        lbl(item.spec_status === "accepted" ? "Accepted" : item.spec_status, "pill-" + (item.spec_status === "accepted" ? "accepted" : "draft")))));
 }
 
 function backlogRow(spec, pill) {

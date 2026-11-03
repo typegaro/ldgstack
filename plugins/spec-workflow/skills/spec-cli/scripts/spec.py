@@ -13,7 +13,7 @@ sys.path.insert(0, str(TRACKER_SCRIPTS))
 
 from tracker.store import TrackerError, find_root, project_lock  # noqa: E402
 
-from speclib import adopt, authoring, catalog, lock, preflight, testability, views  # noqa: E402
+from speclib import adopt, authoring, catalog, items, lock, preflight, testability, views  # noqa: E402
 from speclib.errors import SpecError  # noqa: E402
 from speclib.frontmatter import KINDS, RELATIONS  # noqa: E402
 
@@ -62,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
     defer.add_argument("--reason", required=True)
     confirmed(commands, "undefer").add_argument("spec")
     commands.add_parser("waves", help="startable, plannable (lookahead), topological levels, and deferred specs")
+    commands.add_parser("later", help="open `- **L<n>**` defined-later items across specs").add_argument(
+        "--all", action="store_true", help="include resolved items and items of superseded specs")
+    commands.add_parser("risks", help="open `- **A<n>**` accepted-risk items across specs").add_argument(
+        "--all", action="store_true", help="include resolved items and items of superseded specs")
     promote = confirmed(commands, "promote")
     promote.add_argument("spec")
     promote.add_argument("--from", dest="draft", required=True, metavar="DRAFT", help="a specs/.drafts/ body file")
@@ -91,6 +95,7 @@ def load(root: Path) -> tuple[catalog.Catalog, lock.Manifest]:
     manifest = lock.load_manifest(root)
     catalog.derive_status(specs, manifest)
     specs.errors.extend(lock.lock_errors(specs, manifest))
+    specs.errors.extend(items.collect(specs)[1])
     return specs, manifest
 
 
@@ -140,6 +145,8 @@ def run_locked(root: Path, args: argparse.Namespace) -> Result:
         "defer": lambda: lock.defer(specs, manifest, args.spec, args.reason, args.parent_confirmed),
         "undefer": lambda: lock.undefer(specs, manifest, args.spec, args.parent_confirmed),
         "waves": lambda: waves(specs),
+        "later": lambda: items.query(specs, "later", args.all),
+        "risks": lambda: items.query(specs, "risk", args.all),
         "promote": lambda: authoring.promote(specs, manifest, args.spec, args.draft, args.parent_confirmed, args.reason, args.user_decision),
         "edit": lambda: authoring.edit(specs, manifest, args.spec, args.source, args.reason, args.user_decision, args.conflict, args.parent_confirmed),
     }
@@ -173,7 +180,7 @@ def status(specs: catalog.Catalog) -> dict[str, Any]:
         ready, next_item = [], None
         specs.errors.append(str(error))
     return {"specifications": summaries(specs), "next": next_item, "ready": [item["id"] for item in ready],
-            "next_number": specs.next_id(), "errors": specs.errors}
+            "next_number": specs.next_id(), "open_items": items.counts(specs), "errors": specs.errors}
 
 
 def validate(specs: catalog.Catalog, strict: bool = False) -> dict[str, Any]:
@@ -203,6 +210,8 @@ def text(args: argparse.Namespace, value: Result) -> str:
         return views.mermaid(value) if args.mermaid else json.dumps(value, indent=2)
     if args.command == "waves":
         return waves_text(value)
+    if args.command in ("later", "risks"):
+        return "\n".join(items.item_line(item) for item in value) or "none"
     if args.command in ("list", "ready"):
         return "\n".join(spec_line(item) for item in value) or "none"
     if args.command == "next":
@@ -212,6 +221,7 @@ def text(args: argparse.Namespace, value: Result) -> str:
         lines.append(f"next: {value['next']['name'] if value['next'] else 'none'}")
         lines.append(f"ready: {', '.join(catalog.label(item) for item in value['ready']) or 'none'}")
         lines.append(f"next_number: {value['next_number']}")
+        lines.append(f"open items: {value['open_items']['later']} defined later, {value['open_items']['risk']} accepted risks")
         lines.extend(f"error: {error}" for error in value["errors"])
         return "\n".join(lines)
     if args.command == "validate":

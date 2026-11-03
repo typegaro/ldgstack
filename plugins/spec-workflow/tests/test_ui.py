@@ -92,6 +92,16 @@ class DashboardTest(CliTestCase):
         self.assertEqual([(dep["id"], dep["stage"]) for dep in waiting["waiting_on"]], [(0, "implementing")])
         self.assertEqual(data["groups"]["ready"][0]["requirements"], 2)
         self.assertEqual(data["groups"]["deferred"][0]["reason"], "not this quarter")
+        self.assertEqual((data["later"], data["risks"]), ([], []))
+
+    def test_backlog_lists_open_items(self) -> None:
+        body = "# Third\n\n- **R1** One.\n- **L1** Streaming: how replies stream.\n- **L2** Keep-warm\n- **A1** One database: an outage stops everyone.\n"
+        self.write_spec("0002-third.md", spec_text(2, "third", body=body))
+        self.write_spec("0003-fourth.md", spec_text(3, "fourth", body="# Fourth\n\nResolves 2:L2.\n\n- **R1** Warm.\n"))
+        data = self.get("/api/backlog")
+        self.assertEqual([item["ref"] for item in data["later"]], ["2:L1"])
+        self.assertEqual((data["later"][0]["title"], data["later"][0]["detail"]), ("Streaming", "how replies stream."))
+        self.assertEqual([item["ref"] for item in data["risks"]], ["2:A1"])
 
     def test_spec_reader_data(self) -> None:
         data = self.get("/api/spec/0001")

@@ -38,6 +38,8 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 main { max-width: 1180px; margin: 0 auto; padding: 24px; display: block; }
 .stack { display: flex; flex-direction: column; gap: 20px; }
+.group-title { margin: 8px 0 0; font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.row .titleline span.title { font-size: 15px; font-weight: 600; color: var(--text); }
 
 .lbl { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; border: 1px solid #2e2e2e; color: var(--soft); white-space: nowrap; }
 .lbl.big { height: 28px; padding: 0 12px; font-size: 13px; }
