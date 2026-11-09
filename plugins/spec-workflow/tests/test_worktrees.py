@@ -275,9 +275,9 @@ class GuardTest(WorktreeCase):
     def test_lanes_are_repo_relative_inside_the_worktree(self) -> None:
         inside = self.guard(f"be/{BRANCH}/internal/x.go")
         self.assertEqual((inside.returncode, inside.stdout), (0, ""))
+        # A writer may edit any file of its own spec's checkout, even with strict lanes: the lane only says where the plan's work is.
         outside = self.guard(f"be/{BRANCH}/cmd/x.go", env={"SPEC_WORKFLOW_STRICT_LANES": "1"})
-        self.assertEqual(outside.returncode, 2)
-        self.assertIn("be/internal/**", outside.stderr)
+        self.assertEqual((outside.returncode, outside.stdout), (0, ""))
         foreign = self.guard("be/spec-0001-other/internal/x.go", env={"SPEC_WORKFLOW_STRICT_LANES": "1"})
         self.assertIn("another spec's checkout", foreign.stderr)
 
@@ -362,7 +362,7 @@ class BatchLaneTest(WorktreeCase):
         self.assertEqual(second["paths"], ["fe/src/keys/panel.tsx", "fe/src/app.ts"])
         brief = self.tracker("brief", FEATURE, "--role", "implementer", "--batch", "2")["result"]
         self.assertIn(f"Assignment: {second['assignment']}", brief)
-        self.assertIn("do not touch be/internal/a.go, be/internal/keys/store.go", brief)
+        self.assertIn("parallel executors of this spec are editing be/internal/a.go, be/internal/keys/store.go: leave those files to them", brief)
         self.assertIn(f"join {FEATURE} --assignment {second['assignment']}", brief)
 
         # The batch-1 executor finishes first: a handoff would end batch 2's lane too, so only `join` is allowed (#78).

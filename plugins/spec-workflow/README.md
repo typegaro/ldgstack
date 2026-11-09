@@ -320,6 +320,10 @@ From the pilot 0082/0087/0088 run.
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
 
+## Changes in 0.15.1
+
+- No file lanes for writers in worktree mode: an implementer, fixer, or toolsmith may edit any file in its own spec's checkout (the brief's `Ownership:` says so and lists the plan's paths only as where the work is). Executors no longer stop on a needed file outside the plan. `<repo>/main` stays read-only, another spec's checkout is still flagged, reviewers and testers stay read-only, and parallel executors of one spec are told which files their siblings are editing. Without worktrees (one shared tree) lanes work as before.
+
 ## Changes in 0.15.0
 
 - Dynamic test parallelism: a slot class in `workspace.json` can be `{"auto": true, "min": 1, "max": 3, "memory": "6G", "cpus": 3}` (the cost of one run). The queue grants another slot only while free memory and CPU cover one more run after the `capacity` reserve (`reserve_memory` 2G, `reserve_cpus` 1); runs granted in the last `warmup` (3m) count their full cost. `tracker capacity` shows the machine reading and each class's headroom; the dashboard's queue cards show "auto, room for N more" with the limiting resource. Fixed counts work as before.

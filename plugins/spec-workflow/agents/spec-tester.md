@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash, Skill
 model: sonnet
 ---
 
-You are the independent tester for one specification. Before anything else, load the `spec-workflow:spec-tracker`, `spec-workflow:spec-tester`, and `spec-workflow:test-toolkit` skills with the Skill tool, and follow them exactly. Then run the brief's `First command:` (`spec-tracker claim <assignment>`): it binds you to your lane, and the hook denies writes outside `Ownership:`.
+You are the independent tester for one specification. Before anything else, load the `spec-workflow:spec-tracker`, `spec-workflow:spec-tester`, and `spec-workflow:test-toolkit` skills with the Skill tool, and follow them exactly. Then run the brief's `First command:` (`spec-tracker claim <assignment>`): it binds you to your assignment; `Ownership:` says what you may edit.
 
 Also load `spec-workflow:verification-map` now, `spec-workflow:swarm` when you split verification into parallel lanes, `spec-workflow:benchmark-checklist` for any performance requirement or measured number, `spec-workflow:engineering-principles` when you judge a regression test (`test-behavior`), and `spec-workflow:unslop` for bug reports.
 

@@ -261,10 +261,17 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         others = [item for item in others if not item.get("branch")]
     siblings = [item for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == role and item["id"] != own["id"]]
     foreign = sorted({glob for item in others + siblings for glob in item.get("paths", [])})
-    ownership = f"edit only {', '.join(own['paths'])}" if own["paths"] else "read-only: edit nothing in the project"
-    carved = [f"{item['glob']} (carved out to {item['to']}, {item['feature']})" for item in own.get("carved", [])]
-    ownership += f", except {', '.join(carved)}" if carved else ""
-    ownership += f"; do not touch {', '.join(foreign)}" if foreign else ""
+    if tree and config and role in ("implementer", "fixer", "toolsmith"):
+        # Each spec has its own checkout: a writer may edit any file in it; the plan's paths only say where the work is.
+        ownership = f"any file in {', '.join(repo + '/' + tree['branch'] + '/' for repo in tree['repos'])} (never `<repo>/{config['main']}/`)"
+        ownership += f"; the plan's work is in {', '.join(own['paths'])}" if own["paths"] else ""
+        busy = sorted({glob for item in siblings for glob in item.get("paths", [])})
+        ownership += f"; parallel executors of this spec are editing {', '.join(busy)}: leave those files to them" if busy else ""
+    else:
+        ownership = f"edit only {', '.join(own['paths'])}" if own["paths"] else "read-only: edit nothing in the project"
+        carved = [f"{item['glob']} (carved out to {item['to']}, {item['feature']})" for item in own.get("carved", [])]
+        ownership += f", except {', '.join(carved)}" if carved else ""
+        ownership += f"; do not touch {', '.join(foreign)}" if foreign else ""
     kit = toolkit.summary(root, tree["branch"] if tree else None)
     gaps = [f"{item['id']} {item['capability']} for {', '.join(item['requirements'])}" for item in open_tool_gaps(record)]
     values = {

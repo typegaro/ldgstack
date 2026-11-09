@@ -31,7 +31,7 @@ Efficiency:
   - Example: right after `claim`, ONE message reads the spec section, `requirement list`, and the 3-5 files your batch names (the First turn line).
   - Locate with grep -n, then read one bounded range; after an edit, re-read only the edited range.
   - Use the toolchain lines above as given; run `--help` once before any other unfamiliar command.
-  - Write only inside Ownership; the hook denies other paths. Scratch files go in your scratchpad, never the project.
+  - Write only where Ownership allows (in worktree mode a writer may edit any file of its spec's checkout). Scratch files go in your scratchpad, never the project.
   - Tester/reviewer: use toolkit tools; record a tool gap instead of writing a throwaway script (>~30 lines or reused).
   - Fixer: load dev-inspection only if the bugs touch persisted or runtime state.
   - Executor: follow the plan literally; if it is wrong or missing a file, stop with `handoff --to parent --question "..."` instead of improvising.

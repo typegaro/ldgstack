@@ -46,7 +46,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 - Whenever persisted or runtime state changes, add or update the developer inspection CLI in the same work: commands for the new state, checks for every invariant the spec states, and suspicious-state categories for failure paths. Follow `dev-inspection`, and record the commands you ran with `check add`.
 - When the change alters persisted or runtime state, UI flows (routes, accessible names, forms), or external integrations, update the toolkit tools that depend on them (`tracker toolkit list`) and their smoke tests in the same work, then `tracker toolkit update <name>` and `tracker toolkit verify <name>` (`test-toolkit`). Building new tools for tester gaps is the toolsmith's job, but the spec's own `## Testability` requirements are yours: build each as a reusable, generic command (subcommands, flags, JSON, `--help`), register and verify it, and name the tool, its `--help`, and its smoke check in the `requirement implemented` evidence.
 - No silent placeholders, mocked production behavior, disabled checks, or untracked follow-ups.
-- Don't overwrite, revert, reset, or clean changes you did not create. Edit only inside your brief's `Ownership:` paths (the hook enforces it); a needed file outside them goes in your report, not in a workaround.
+- Don't overwrite, revert, reset, or clean changes you did not create. Edit what the brief's `Ownership:` allows: in worktree mode any file in your spec's checkout (edit what the change needs, including files the plan didn't list, and name them in your handoff); without worktrees, only your lane's paths.
 - After the parent resolves a blocker, re-read the specification before resuming; don't work from conversational memory.
 - Reading: `grep -n` to locate, then read one bounded range; never dump whole large files. After an edit, re-read only the edited range. Batch independent reads, greps, and status commands as parallel calls in one turn.
 - Batch assignment: implement only the listed requirement IDs. Unless the prompt says this is the final batch, end without a handoff; the parent resumes you (or a fresh implementer) with the next batch.
@@ -54,7 +54,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 ## Executor mode (the brief carries a `Plan:`)
 
 - Follow the plan literally, batch by batch: its files, change shapes, tests, assertions, and commands. Don't redesign, reorder, or widen it.
-- Stop instead of improvising when a listed file or symbol is missing, a step contradicts the spec or another step, a needed file is outside Ownership, or a test can't be written as specified: `tracker handoff <feature> --to parent --question "<what, where, options>"`. The parent answers (`tracker answer`) and the record comes back to you, or to the planner for a replan.
+- Stop instead of improvising when a listed file or symbol is missing, a step contradicts the spec or another step, a needed file is outside Ownership (only without worktrees), or a test can't be written as specified: `tracker handoff <feature> --to parent --question "<what, where, options>"`. The parent answers (`tracker answer`) and the record comes back to you, or to the planner for a replan.
 - Mark requirements per batch: `requirement implemented` for each ID as its batch's "Done when" passes, and record its checks with the names the plan gives.
 - Gaps you worked around anyway (a trivial missing import) go in your report so the planner learns.
 

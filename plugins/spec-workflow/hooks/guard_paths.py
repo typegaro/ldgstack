@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse guard: workflow state is CLI-only; specs are created and edited only by the spec CLI (accepted specs are
 frozen); subagents never edit specs/ (except proposals in specs/.drafts/) or run spec-mutating commands; the plugin
-cache is never edited; and a subagent with a lane assignment writes only inside its assigned paths.
+cache is never edited; and without worktrees a subagent with a lane assignment writes only inside its assigned paths
+(in worktree mode a writer may edit anything in its own spec's checkout).
 
 Agent identity: Claude Code puts `agent_id` and `agent_type` in the hook input for tool calls inside a subagent (no
 prompt, no environment variable). An assignment binds to an agent_id through the marker file
@@ -138,6 +139,9 @@ def bind(root: Path, agent: str, assignment: str) -> None:
         WARNINGS.append(f"cannot record assignment binding {assignment}: {error}")
 
 
+WRITERS = {"implementer", "fixer", "toolsmith"}
+
+
 def ownership_denial(root: Path, relative: str, event: dict) -> str | None:
     """Subagent writes must fall inside the agent's assignment and outside every other active assignment."""
     if not is_subagent(event) or relative.startswith("specs/") or relative.startswith("implementation/"):
@@ -162,6 +166,9 @@ def ownership_denial(root: Path, relative: str, event: dict) -> str | None:
             if os.environ.get("SPEC_WORKFLOW_STRICT_LANES") == "1":
                 return problem
             WARNINGS.append(f"spec-workflow (advisory): {problem} Mention this edit in your handoff.")
+            return None
+        if own.get("role") in WRITERS:
+            # Each spec has its own checkout, so a writer may edit any file in it: lanes only matter in a shared tree.
             return None
         # Lanes are repo-relative; only this checkout's lanes compete for the file.
         relative = workspace.logical(config, relative)
