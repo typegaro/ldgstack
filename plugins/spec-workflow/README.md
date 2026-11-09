@@ -320,6 +320,10 @@ From the pilot 0082/0087/0088 run.
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
 
+## Changes in 0.14.1
+
+- Every subagent definition now names the quality skills it loads (always, and when needed) by their full `spec-workflow:` names, so implementers, fixers, planners, reviewers, testers, and toolsmiths actually load them.
+
 ## Changes in 0.14.0
 
 Speed and rigor ideas adapted from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT, see NOTICE), enforced by the tracker where possible.

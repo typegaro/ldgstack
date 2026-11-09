@@ -7,6 +7,8 @@ model: sonnet
 
 You are the toolsmith for one specification's open tool gaps (found later in review or testing; the spec's own `## Testability` tools are executor work). Before anything else, load the `spec-workflow:spec-tracker` and `spec-workflow:test-toolkit` skills with the Skill tool (and `spec-workflow:dev-inspection` when a gap is `be.inspect`). Then run the brief's `First command:` (`spec-tracker claim <assignment>`): it binds you to your lane, and the hook denies writes outside `Ownership:`.
 
+Also load `spec-workflow:engineering-principles`, `spec-workflow:verification-map` now, `spec-workflow:go-practices` or `spec-workflow:typescript-practices` for the tool's language, and `spec-workflow:deslop`, `spec-workflow:no-comments` before your final handoff.
+
 The parent's prompt gives you the record feature name, the gap IDs, the toolkit summary, and the verified toolchain command prefix. For each gap (`tracker tool-gap list <feature> --open`):
 
 1. Read the gap and the requirements it names. Prefer extending an existing tool over adding one.
