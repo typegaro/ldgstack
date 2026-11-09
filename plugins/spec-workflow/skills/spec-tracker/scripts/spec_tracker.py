@@ -278,6 +278,8 @@ def build_parser() -> argparse.ArgumentParser:
     ran.add_argument("queue", choices=("merge",))
     ran.add_argument("--parent-confirmed", action="store_true")
 
+    commands.add_parser("next", help="the parent's one command: advance every spec, then list the actions that need you (launch agents with briefs, answer, ask the user, merge)")
+    commands.add_parser("merge", help="merge the next accepted spec in the merge queue (run it as a background command)")
     commands.add_parser("capacity", help="the machine's free memory and load, and how many more runs each auto slot class allows now")
     stalled = commands.add_parser("stuck", help="active assignments with no claim, record write, or commit past their role's usual run time")
     stalled.add_argument("--role", choices=[role for role in ROLES if role != "parent"])
@@ -1890,6 +1892,9 @@ def pr_open(root: Path, args: argparse.Namespace) -> Record:
         if not any(ci.stats(root, config, repo, branch)["ahead"] for repo in tree["repos"]):
             raise TrackerError(f"no commits on {branch} in {', '.join(tree['repos'])}: nothing to review")
         errors = gate_errors(root, record, "ready-test", exempt_roles=("tester", "reviewer"), exempt_checks=ci.names(config))
+        if config["ci"].get("fast"):
+            # The fast CI tier this command runs next is the writer's verification.
+            errors = [error for error in errors if error != "no verification check has passed"]
         if record["current_role"] == "fixer" and any(item["status"] in {"open", "assigned"} for item in record["bugs"]):
             errors.append("bugs are still open or assigned (`tracker bug fixed` each one)")
         if errors:
@@ -2304,6 +2309,359 @@ def status(root: Path, args: argparse.Namespace) -> Any:
     return [summary(record, root) for record in load_all(root)]
 
 
+# The simple flow (worktree mode) --------------------------------------------------------------------------------
+# Agents act through their assignment: `tracker ASSIGN-... <verb>`; the assignment names the spec and the role.
+# The parent runs `tracker next`: it advances every spec as far as the tracker can, and returns only the actions
+# that need the orchestrator (launch an agent with a ready brief, answer a question, ask the user, run a merge).
+
+ISSUE_AGAIN = 15 * 60  # an issued brief nobody claimed within this time is issued again
+WRITER_CAP = 2         # specs with a writer at work at once (implementer or fixer); workspace.json "writers" overrides
+
+
+def namespace(**values: Any) -> argparse.Namespace:
+    """Arguments for an existing command handler, with the defaults their parsers give."""
+    defaults = {"parent_confirmed": False, "user_decision": None, "question": None, "reason": None, "checks_not_run": "None",
+                "light": None, "as_role": None, "via_pr": False, "completed": None, "remaining": None}
+    return argparse.Namespace(**{**defaults, **values})
+
+
+def find_lane(root: Path, assignment: str) -> tuple[Record, Record]:
+    for record in load_all(root):
+        for lane in record.get("assignments", []):
+            if lane["id"] == assignment:
+                if lane["status"] != "active":
+                    raise TrackerError(f"{assignment} was released ({lane.get('released_by', 'by the parent')}); stop and report to the parent")
+                return record, lane
+    raise TrackerError(f"unknown assignment {assignment}; use the ID from your brief's Assignment line")
+
+
+def as_role(record: Record, lane: Record) -> str | None:
+    return lane["role"] if verifying(record) and lane["role"] in ("reviewer", "tester") else None
+
+
+def batch_requirements(record: Record, lane: Record) -> list[str]:
+    plan = plans.latest(record, any_generation=True)
+    if plan and lane.get("batch"):
+        return list(plans.batch(plan, int(lane["batch"]))["requirements"])
+    return [item["id"] for item in record["requirements"] if not item["implemented"]]
+
+
+def pr_ready(root: Path, record: Record) -> bool:
+    """Worktree mode with a fast CI tier: a writer's `done` opens the PR; otherwise it hands off to review directly."""
+    config = workspace_config(root, required=False)
+    tree = record.get("worktree")
+    return bool(config and config["ci"].get("fast") and tree and not tree.get("removed_at"))
+
+
+def agent_done(root: Path, record: Record, lane: Record, args: argparse.Namespace) -> Any:
+    feature, role, summary_ = record["feature"], lane["role"], args.summary
+    for entry in args.not_run or []:
+        name, _, why = entry.partition(":")
+        with project_lock(root):
+            check(root, namespace(feature=feature, action="add", name=name.strip(), method="not run", result="not_run",
+                                  evidence=why.strip() or "not run", as_role=as_role(record, lane)))
+    if role == "planner":
+        with project_lock(root):
+            return handoff(root, namespace(feature=feature, to="parent", completed=summary_, remaining="executor batches"))
+    if role == "implementer":
+        with project_lock(root):
+            for rid in batch_requirements(record, lane):
+                item = find_item(load(root, feature), "requirements", rid)
+                if not item["implemented"]:
+                    requirement(root, namespace(feature=feature, action="implemented", id=rid, evidence=summary_, location="", evidence_from=None))
+            record = load(root, feature)
+            siblings = [item for item in record.get("assignments", []) if item["status"] == "active" and item["role"] == "implementer" and item["id"] != lane["id"]]
+            left = [item["id"] for item in record["requirements"] if not item["implemented"]]
+            if siblings or left:
+                join(root, namespace(feature=feature, assignment=lane["id"], completed=summary_))
+                return {"feature": feature, "result": "batch done", "remaining": left, "next": "stop here; the parent starts the next batch"}
+        if not pr_ready(root, record):
+            with project_lock(root):
+                return handoff(root, namespace(feature=feature, to="reviewer", completed=summary_, remaining="review"))
+        return pr_open(root, namespace(feature=feature, completed=summary_, remaining="verify"))
+    if role == "fixer" and not pr_ready(root, record):
+        with project_lock(root):
+            return handoff(root, namespace(feature=feature, to="reviewer", completed=summary_, remaining="review the fix"))
+    if role == "fixer":
+        config = workspace_config(root)
+        with project_lock(root):
+            for repo in record["worktree"]["repos"]:
+                workspace.checkpoint(root, repo, record["worktree"]["branch"], f"{feature} fixer {generation(record)}")
+            errors, _ = fixround.light_errors(root, config, load(root, feature))
+        light = None if errors else "small low-severity fix (measured by the tracker)"
+        return {**pr_open(root, namespace(feature=feature, completed=summary_, remaining="verify the fix", light=light)),
+                "verify": "light: straight to retest" if light else f"full: {'; '.join(errors)}"}
+    with project_lock(root):
+        if role == "toolsmith":
+            if record.get("side_role") == "toolsmith":
+                return join(root, namespace(feature=feature, assignment=None, completed=summary_))
+            return handoff(root, namespace(feature=feature, to="tester", completed=summary_, remaining="test with the new tools"))
+        name = "code-review" if role == "reviewer" else "independent-test"
+        check(root, namespace(feature=feature, action="add", name=name, method=f"{role} round", result="passed", evidence=summary_,
+                              as_role=as_role(record, lane)))
+        record = load(root, feature)
+        clean = not open_tool_gaps(record) and not any(item["status"] in {"open", "assigned"} for item in record["bugs"])
+        target = "tester" if role == "reviewer" and not verifying(record) and clean else "parent"
+        return handoff(root, namespace(feature=feature, to=target, completed=summary_, remaining="next round" if target == "tester" else "parent decides",
+                                       as_role=as_role(record, lane)))
+
+
+def agent_command(root: Path, args: argparse.Namespace) -> Any:
+    record, lane = find_lane(root, args.assignment)
+    feature, role = record["feature"], lane["role"]
+    if args.verb == "done":
+        return agent_done(root, record, lane, args)
+    if args.verb == "stack":
+        config = workspace_config(root)
+        assert config is not None
+        command_line = " ".join(args.run).removeprefix("-- ").strip()
+        return queue_hold(root, config, namespace(queue="test", feature=feature, slot_class=None if "stack" not in config["slots"]["test"] else "stack",
+                                                  run=command_line, timeout=None))
+    with project_lock(root):
+        if args.verb == "bug":
+            proof = {"ran": not (args.unproven or args.preexisting), "unproven": args.unproven, "preexisting": args.preexisting}
+            return bug(root, namespace(feature=feature, action="add", title=args.title, severity=args.severity, spec_ref=args.spec_ref,
+                                       environment=f"{role} on the spec checkout", reproduction=args.repro, expected=args.expected,
+                                       actual=args.got, evidence=args.got, found_by=None, as_role=as_role(record, lane), **proof))
+        if args.verb == "fixed":
+            return bug(root, namespace(feature=feature, action="fixed", id=args.bug, fix=args.how, regression=args.test))
+        if args.verb == "retest":
+            if args.result == "ok":
+                return bug(root, namespace(feature=feature, action="verify", id=args.bug, retest=args.evidence))
+            return bug(root, namespace(feature=feature, action="reopen", id=args.bug, evidence=args.evidence))
+        if args.verb == "tested":
+            ids = [item["id"] for item in record["requirements"] if item["implemented"]] if args.req == "all" else [args.req]
+            for rid in ids:
+                result = requirement(root, namespace(feature=feature, action="tested", id=rid, evidence=args.evidence, evidence_from=None))
+            return result
+        if args.verb == "ask":
+            return handoff(root, namespace(feature=feature, to="parent", question=args.text, as_role=as_role(record, lane)))
+        if args.verb == "blocked":
+            blocker(root, namespace(feature=feature, action="add", summary=args.text[:200], report=args.text))
+            if verifying(record):
+                return {"feature": feature, "blocker": "recorded", "next": "finish what you can, then `done`"}
+            return handoff(root, namespace(feature=feature, to="parent", completed="blocked", remaining=args.text))
+        if args.verb == "gap":
+            reqs = args.req or [item["id"] for item in record["requirements"]]
+            return tool_gap(root, namespace(feature=feature, action="add", capability=args.capability, requirement=reqs, why=args.why))
+    raise TrackerError(f"unknown verb {args.verb}")
+
+
+def build_agent_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="spec-tracker ASSIGN-...", description="an agent's commands; the assignment names the spec and your role")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("assignment")
+    verbs = parser.add_subparsers(dest="verb", required=True)
+    done = verbs.add_parser("done", help="your round is finished: records it and hands the spec on (writers: commit, fast CI, review)")
+    done.add_argument("summary", help="what you did, in a sentence or two (reviewer: areas reviewed; tester: what you ran)")
+    done.add_argument("--not-run", action="append", metavar="CHECK: WHY", help="a check that applies but could not run")
+    found = verbs.add_parser("bug", help="file a bug you reproduced")
+    found.add_argument("title")
+    found.add_argument("--repro", required=True, help="the exact command or steps that show it")
+    found.add_argument("--got", required=True, help="what it printed or did")
+    found.add_argument("--expected", default="what the spec requires", help="what should happen (default: what the spec requires)")
+    found.add_argument("--severity", choices=SEVERITIES, default="medium")
+    found.add_argument("--spec-ref", default="spec", help="the requirement or spec section, e.g. R3")
+    proof = found.add_mutually_exclusive_group()
+    proof.add_argument("--unproven", action="store_true", help="found by reading, not reproduced (low/medium become follow-ups)")
+    proof.add_argument("--preexisting", action="store_true", help="main already has it (a follow-up)")
+    fixed = verbs.add_parser("fixed", help="fixer: a bug is fixed")
+    fixed.add_argument("bug")
+    fixed.add_argument("how")
+    fixed.add_argument("--test", required=True, help="the regression test or check that fails without the fix")
+    retest = verbs.add_parser("retest", help="tester: a fixed bug's retest")
+    retest.add_argument("bug")
+    retest.add_argument("result", choices=("ok", "fail"))
+    retest.add_argument("evidence")
+    tested = verbs.add_parser("tested", help="tester: a requirement (or all) observed working")
+    tested.add_argument("req", help="REQ-n or all")
+    tested.add_argument("evidence")
+    for name, text in (("ask", "a question only the parent can answer (the spec and code don't)"), ("blocked", "the spec is contradictory or unsafe")):
+        verbs.add_parser(name, help=text).add_argument("text")
+    gap = verbs.add_parser("gap", help="a test capability the toolkit lacks")
+    gap.add_argument("capability")
+    gap.add_argument("why")
+    gap.add_argument("--req", action="append", help="requirements it blocks (default: all)")
+    stack = verbs.add_parser("stack", help="run a command that starts the shared test stack, holding a test slot")
+    stack.add_argument("run", nargs=argparse.REMAINDER)
+    return parser
+
+
+def issued(root: Path, record: Record, role: str) -> bool:
+    """A brief for the role went out recently and nobody has claimed it yet, or an agent holds it."""
+    for lane in record.get("assignments", []):
+        if lane["status"] == "active" and lane["role"] == role:
+            if lanes.claimed(root, lane["id"]):
+                return True
+            stamp = supervise.parse(lane.get("issued_at"))
+            if stamp and (supervise.datetime.now(supervise.timezone.utc) - stamp).total_seconds() < ISSUE_AGAIN:
+                return True
+    return False
+
+
+AGENT_TYPES = {"planner": "spec-workflow:spec-planner", "implementer": "spec-workflow:spec-implementer", "fixer": "spec-workflow:spec-fixer",
+               "reviewer": "spec-workflow:spec-reviewer", "tester": "spec-workflow:spec-tester", "toolsmith": "spec-workflow:spec-toolsmith"}
+
+
+def launch(root: Path, feature: str, role: str, why: str, fresh: bool = False, batch: int | None = None) -> Record:
+    text = brief(root, namespace(feature=feature, role=role, batch=str(batch) if batch else None, final_batch=False, fresh=fresh, parent_confirmed=True))
+
+    def mark(item: Record) -> None:
+        lane = next((entry for entry in reversed(item.get("assignments", [])) if entry["status"] == "active" and entry["role"] == role), None)
+        if lane:
+            lane["issued_at"] = now()
+
+    edit(root, feature, set(ROLES), mark)
+    return {"do": "launch", "feature": feature, "role": role, "agent": AGENT_TYPES[role], "why": why, "brief": text}
+
+
+def next_batch_number(root: Record, record: Record) -> int | None:
+    plan = plans.latest(record, any_generation=True)
+    if not plan:
+        return None
+    done_ids = {item["id"] for item in record["requirements"] if item["implemented"]}
+    for item in plan["batches"]:
+        if set(item["requirements"]) - done_ids and not deps.blocked_batch(record, item, root):
+            return int(item["number"])
+    return None
+
+
+def advance(root: Path, config: Record, record: Record, actions: list[Record], writers: list[str]) -> None:
+    """One record, as far as the tracker can take it; actions collects what needs the orchestrator."""
+    feature, status, role = record["feature"], record["status"], record["current_role"]
+    if pending_steps(record, root):
+        actions.append({"do": "parent", "feature": feature, "why": "the spec changed", "commands": pending_steps(record, root)})
+        return
+    if status == "needs_answer":
+        actions.append({"do": "answer", "feature": feature, "questions": [f"{item['id']} ({item['role']}): {item['text']}" for item in open_questions(record)],
+                        "how": f"answer from the spec, plan, and code: `tracker answer {feature} --text \"...\"` (add --replan for a design question); "
+                               "a product call goes to the user"})
+        return
+    if status == "blocked":
+        actions.append({"do": "user", "feature": feature, "why": "specification blocker",
+                        "blockers": [f"{item['id']}: {item['summary']}" for item in open_blockers(record)]})
+        return
+    if role == "parent" and not record["requirements"]:
+        import_requirements(root, namespace(feature=feature, action="import", include_amended=False, exclude_amended=False))
+        record = load(root, feature)
+    if role == "parent" and status in ("new", "awaiting_parent") and not plans.latest(record) and plans.needs_plan(record):
+        handoff(root, namespace(feature=feature, to="planner", completed="requirements imported", remaining="plan it"))
+        actions.append(launch(root, feature, "planner", "plan the spec"))
+        return
+    if role == "planner":
+        if not issued(root, record, "planner"):
+            actions.append(launch(root, feature, "planner", "plan the spec"))
+        return
+    unimplemented = [item["id"] for item in record["requirements"] if not item["implemented"]]
+    if role == "parent" and unimplemented and status not in ("bugs_found", "needs_tooling"):
+        if len(writers) >= config.get("writers", WRITER_CAP):
+            return
+        if not record.get("worktree"):
+            worktree(root, namespace(action="create", feature=feature, repos=None, base=None, parent_confirmed=True))
+        handoff(root, namespace(feature=feature, to="implementer", completed="ready to build", remaining="executor batches",
+                                parent_confirmed=True, reason="small spec: no plan needed"))
+        record, role = load(root, feature), "implementer"
+    if role == "implementer":
+        if any(item["status"] == "active" and item["role"] == "implementer" for item in record.get("assignments", [])):
+            if not issued(root, record, "implementer"):
+                actions.append(launch(root, feature, "implementer", "build the next batch"))
+            return
+        number = next_batch_number(root, record)
+        if plans.latest(record) and number is None:
+            actions.append({"do": "wait", "feature": feature, "why": "the remaining batches require specs that aren't accepted yet"})
+            return
+        assign(root, namespace(feature=feature, role="implementer", from_plan=bool(plans.latest(record)), paths=None if plans.latest(record) else
+                               [f"{repo}/**" for repo in record["worktree"]["repos"]], read_only=False, release=False, assignment=None, parallel=False,
+                               batch=number, carve=None, carve_from=None, alongside=False, slot_class=None, parent_confirmed=True))
+        writers.append(feature)
+        actions.append(launch(root, feature, "implementer", f"build batch {number}" if number else "build the spec", batch=number))
+        return
+    if status == "bugs_found" or (role == "parent" and any(item["status"] == "open" for item in record["bugs"])):
+        if len(writers) >= config.get("writers", WRITER_CAP):
+            return
+        for item in record["bugs"]:
+            if item["status"] == "open":
+                bug(root, namespace(feature=feature, action="assign", id=item["id"], fixer="fixer"))
+        handoff(root, namespace(feature=feature, to="fixer", completed="bugs assigned", remaining="fix them"))
+        assign(root, namespace(feature=feature, role="fixer", from_plan=bool(plans.latest(record, any_generation=True)),
+                               paths=None if plans.latest(record, any_generation=True) else [f"{repo}/**" for repo in record["worktree"]["repos"]],
+                               read_only=False, release=False, assignment=None, parallel=False, batch=None, carve=None, carve_from=None,
+                               alongside=False, slot_class=None, parent_confirmed=True))
+        writers.append(feature)
+        actions.append(launch(root, feature, "fixer", f"fix {', '.join(item['id'] for item in load(root, feature)['bugs'] if item['status'] == 'assigned')}"))
+        return
+    if role == "fixer":
+        if not issued(root, record, "fixer"):
+            actions.append(launch(root, feature, "fixer", "fix the assigned bugs"))
+        return
+    if status == "needs_tooling" or role == "toolsmith":
+        if role != "toolsmith":
+            handoff(root, namespace(feature=feature, to="toolsmith", completed="tool gaps recorded", remaining="build the tools"))
+            assign(root, namespace(feature=feature, role="toolsmith", from_plan=False, paths=[f"{repo}/**" for repo in record["worktree"]["repos"]],
+                                   read_only=False, release=False, assignment=None, parallel=False, batch=None, carve=None, carve_from=None,
+                                   alongside=False, slot_class=None, parent_confirmed=True))
+        if not issued(root, load(root, feature), "toolsmith"):
+            actions.append(launch(root, feature, "toolsmith", "build the missing test tools"))
+        return
+    state = queues.sync(root, config)
+    for verifier, queue in (("reviewer", "review"), ("tester", "test")):
+        if verifier not in (role, record.get("side_role")):
+            continue
+        item = queues.find(state, queue, feature)
+        if item and item["state"] in queues.TAKEN and not issued(root, load(root, feature), verifier):
+            has_lane = any(lane["status"] == "active" and lane["role"] == verifier for lane in load(root, feature).get("assignments", []))
+            actions.append(launch(root, feature, verifier, "verify the patch" if verifying(record) else f"{queue} round", fresh=not has_lane))
+        elif item and item["state"] == "waiting":
+            actions.append({"do": "wait", "feature": feature, "why": f"waiting for a {queue} slot (#{queues.positions(state['queues'][queue]['items']).get(feature)})"})
+    if status == "ready_for_acceptance" and role == "parent":
+        if queues.find(state, "merge", feature) is None:
+            queue_add(root, config, namespace(queue="merge", feature=feature, slot_class=None, priority=0, parent_confirmed=True))
+        actions.append({"do": "merge", "feature": feature, "command": "tracker merge", "why": "accepted: merge it (run as a background command)"})
+
+
+def run_next(root: Path, args: argparse.Namespace) -> Record:
+    config = workspace_config(root)
+    assert config is not None
+    actions: list[Record] = []
+    with project_lock(root):
+        for row in supervise.stuck(root)["stuck"]:
+            record = load(root, row["feature"])
+            if row["claimed"] and row["role"] in AGENT_TYPES:
+                actions.append({**launch(root, row["feature"], row["role"], f"stuck: no progress for {row['idle_seconds'] // 60} min "
+                                         f"(last: {row['last_signal']}); stop the old agent", fresh=True),
+                                "retry": "a smaller scope after a context limit, another model after a tool error; after two retries replan"})
+        records = load_all(root)
+        writers = [item["feature"] for item in records if item["current_role"] in ("implementer", "fixer")]
+        for record in records:
+            if any(action["feature"] == record["feature"] for action in actions):
+                continue
+            advance(root, config, load(root, record["feature"]), actions, writers)
+        known = {item["feature"] for item in load_all(root)}
+        waves = subprocess.run([sys.executable, str(briefs.SPEC_CLI), "--json", "waves"], cwd=root, capture_output=True, text=True)
+        startable = json.loads(waves.stdout).get("result", {}).get("startable", []) if waves.returncode == 0 else []
+        for spec in startable:
+            feature = spec["name"].removesuffix(".md")
+            if feature in known or spec.get("kind") == "decision" or len(writers) >= config.get("writers", WRITER_CAP):
+                if spec.get("kind") == "decision" and feature not in known:
+                    actions.append({"do": "user", "feature": feature, "why": "a decision spec: archive it once the user accepts it"})
+                continue
+            initialize(root, namespace(spec=f"specs/{spec['name']}", title=None, early=False))
+            advance(root, config, load(root, feature), actions, writers)
+        for row in supervise.waiting(supervise.read(root)):
+            actions.append({"do": "user", "feature": row.get("feature"), "why": row["decision"], "pick": row.get("pick"), "risk": row.get("risk"),
+                            "answer": f"tracker decision resolve {row['id']} --answer \"<their words>\""})
+        queues.sync(root, config)
+    busy = [f"{item['feature']}: {item['current_role']}" for item in load_all(root) if item["current_role"] != "parent"]
+    return {"actions": actions, "working": busy,
+            "next": "do every action (launch agents in parallel, each with its brief verbatim), then run `tracker next` again when an agent "
+                    "finishes or a background merge exits" if actions else "nothing to do now: wait for a running agent or merge to finish, then `tracker next`"}
+
+
+def merge_command(root: Path, args: argparse.Namespace) -> Record:
+    config = workspace_config(root)
+    assert config is not None
+    return merge_run(root, config, namespace(parent_confirmed=True))
+
 HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "init": initialize, "status": status, "list": status, "requirement": requirement, "file": changed_file,
     "check": check, "bug": bug, "blocker": blocker, "handoff": handoff, "gate": gate,
@@ -2311,10 +2669,10 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
     "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
     "pr": pr_command, "ci": ci_command, "queue": queue_command, "ui": ui_command,
-    "stuck": lambda root, args: supervise.stuck(root, args.role), "capacity": capacity_command, "decision": supervise.decision,
+    "stuck": lambda root, args: supervise.stuck(root, args.role), "capacity": capacity_command, "next": run_next, "merge": merge_command, "decision": supervise.decision,
 }
 # Long-running commands take the project lock per step, so CI runs and waits never block other agents' tracker calls.
-LOCK_FREE = {"pr", "ci", "queue", "ui"}
+LOCK_FREE = {"pr", "ci", "queue", "ui", "next", "merge"}
 # Commands that move records between roles; the queues follow them.
 SYNC_AFTER = {"init", "handoff", "answer", "assign", "claim", "join", "archive", "abandon", "restore", "brief"}
 
@@ -2369,6 +2727,18 @@ def output(value: Any, as_json: bool) -> None:
 
 
 def main() -> int:
+    words = [word for word in sys.argv[1:] if word != "--json"]
+    if words and words[0].startswith("ASSIGN-"):
+        args = build_agent_parser().parse_args()
+        try:
+            output(agent_command(find_root(), args), args.json)
+            return 0
+        except (TrackerError, workspace.WorkspaceError) as error:
+            if args.json:
+                print(json.dumps({"ok": False, "error": {"code": "tracker_error", "message": str(error)}}, separators=(",", ":")))
+            else:
+                print(f"error: {error}", file=sys.stderr)
+            return 1
     args = build_parser().parse_args()
     args.json = args.json or getattr(args, "json_after", False)
     try:

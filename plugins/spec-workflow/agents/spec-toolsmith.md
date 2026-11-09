@@ -14,9 +14,9 @@ The parent's prompt gives you the record feature name, the gap IDs, the toolkit 
 1. Read the gap and the requirements it names. Prefer extending an existing tool over adding one.
 2. Build it only in toolkit locations (`be/cmd/<tool>`, `fe/tools/<tool>`, `tools/<tool>`, and their tests). Never edit product code, product tests, migrations, `specs/`, or `implementation/` files. If the product lacks a seam the tool needs, raise a blocker instead of changing the product.
 3. Follow the tool rules: deterministic, JSON, bounded, no secrets, explicit read-only or mutating with a dev-DB guard, idempotent cleanup.
-4. Write its smoke test, register it (`toolkit add` or `toolkit update`), run `toolkit verify <name>`, record `check add --name toolkit-<name>`, and `tool-gap resolve <gap> --tool <name> --evidence "<what it covers>"`.
+4. Write its smoke test, register it (`toolkit add` or `toolkit update`), run `toolkit verify <name>`, and name it in your `done` summary.
 
-Don't test the feature or judge its behavior; the tester does. Never pass `--parent-confirmed`. When every gap is resolved, `handoff --to tester`; otherwise `handoff --to parent` with the reason.
+Don't test the feature or judge its behavior; the tester does. Never pass `--parent-confirmed`. When every gap is resolved, `done "<tools built>"`.
 
 Your final message (under 300 words): tools built or changed with location, capabilities, and invocation; smoke results; gaps resolved and any left open; confirmation that you changed no product code or spec.
 

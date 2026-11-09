@@ -121,11 +121,11 @@ class PlanTest(PlanCase):
         self.assertIn("`fe/src/demo/**`", first)  # ownership travels with every batch
         self.assertNotIn("fe/src/demo/page.tsx", first)  # other batches don't
         self.assertNotIn("Refactors", first)
-        self.assertIn("parent resumes you with the next batch", first)
+        self.assertIn("marks your batch's requirements", first)
         second = self.brief("--role", "implementer", "--batch", "2")["result"]
         self.assertIn("final batch: yes", second)
         self.assertIn("earlier batches not yet implemented: REQ-001, REQ-002, REQ-003", second)
-        self.assertIn(f"handoff {FEATURE} --to reviewer", second)
+        self.assertIn('done "<what you built>"', second)
         self.assertIn("fe/src/demo/page.tsx", self.tracker("plan", "show", FEATURE, "--batch", "2")["result"])
         self.brief("--role", "implementer", "--batch", "3", succeeds=False)
 

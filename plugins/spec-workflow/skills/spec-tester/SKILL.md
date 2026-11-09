@@ -7,7 +7,7 @@ description: Rules for independently testing an implemented specification by exe
 
 Load `spec-tracker` for the CLI, gates, severity scale, and blocker report format, `test-toolkit` for the toolkit and tool gaps, and `verification-map` for how to reach and prove each feature. Start your report by restating the spec's goal in your own words.
 
-**Parallel verify.** When the record is `ready_for_verify`, the reviewer works on the same patch at the same time. Pass `--as tester` on `check add`, `bug add`, and your final `handoff --to parent`. Don't wait for the review and don't read its findings; your verdict covers the patch you tested, recorded automatically with each check.
+**Parallel verify.** The reviewer may work on the same patch at the same time; don't wait for it or read its findings. Your verbs (`spec-tracker`) need nothing beyond your assignment.
 
 ## Boundaries
 
@@ -27,14 +27,14 @@ Your value is independence, so build your expectations before you see how the co
 
 ## Toolkit first
 
-Before executing anything, map each requirement and plan item to the capabilities it needs (`test-toolkit`: `be.seed`, `be.fault`, `ext.mock.<service>`, `fe.drive`, `fe.inspect`, ...), then check `tracker toolkit list`. Use registered tools for edge cases, failures, external services, and UI. For each missing capability, `tracker tool-gap add <feature> --capability <c> --requirement REQ-x --why "..."` instead of writing a throwaway script, test everything else, and hand off to the parent; the parent dispatches the toolsmith and resumes you. A tiny one-off probe is fine; anything reused or longer than about 30 lines is a gap. A tool that fails or misbehaves is a gap too (say so in `--why`). For a UI requirement with no `fe.drive`/`fe.inspect` tool, record the gap before the first browser probe, not after writing one.
+Before executing anything, map each requirement and plan item to the capabilities it needs (`test-toolkit`: `be.seed`, `be.fault`, `ext.mock.<service>`, `fe.drive`, `fe.inspect`, ...), then check `tracker toolkit list`. Use registered tools for edge cases, failures, external services, and UI. For each missing capability, `gap <c> "<why>"` instead of writing a throwaway script, test everything else, and hand off to the parent; the parent dispatches the toolsmith and resumes you. A tiny one-off probe is fine; anything reused or longer than about 30 lines is a gap. A tool that fails or misbehaves is a gap too (say so in `--why`). For a UI requirement with no `fe.drive`/`fe.inspect` tool, record the gap before the first browser probe, not after writing one.
 
 ## 2. Preparation
 
 - Read the verification map's files for the features this spec touches before planning how to drive them; when the spec adds or changes a user-facing feature, extend the map (its feature file and the index) in the same round, or record a tool gap if you can't.
-- Confirm with `status` that the record is `ready_for_test`, `ready_for_retest`, or `ready_for_verify`. If the handoff is incomplete, report that to the parent; don't guess at missing setup.
+- If your brief or the environment is incomplete, `ask` the parent; don't guess at missing setup.
 - Use the toolchain command prefix the parent supplied, in the brief's `Worktree:` checkout. If you cannot build, run, or reach required services, stop and hand off to the parent with the failure. **Never verify by reading code alone.**
-- Your `claim` holds a test-queue slot and your handoff frees it: run one isolated stack, run the full suite once, and tear the stack down before your handoff so the next spec's tester can start. Fast CI (`ci-fast`) is the implementer's evidence, not yours.
+- Your `claim` holds a test-queue slot and `done` frees it: run one isolated stack, run the full suite once, and tear the stack down before your handoff so the next spec's tester can start. Fast CI (`ci-fast`) is the implementer's evidence, not yours.
 - Prepare isolated test data. Never put secrets in the record.
 - Batch independent reads, greps, and status commands as parallel calls in one turn; read files in bounded ranges.
 - Run tests in parallel:
@@ -55,24 +55,23 @@ Use every method the spec and project make applicable:
 - Conventions: responses match the cross-cutting specs (pagination, error shapes, status codes).
 - Existing automated tests as supporting evidence only, never as a substitute.
 
-Record each executed method with `check add` (`--result passed|failed|not_run|not_applicable`). Acceptance requires at least one passing check recorded by you. `not_run` means you could not run something that applies; it blocks acceptance until it runs or the user waives it. `not_applicable` means it does not apply (state why); it never blocks.
+Name each method you ran, and its result, in your `done` summary; a method that applies but couldn't run goes in `done --not-run "<method>: <why>"` (it blocks acceptance until it runs or the user waives it).
 
 ## 4. Coverage and bugs
 
-- Test every requirement and every plan item, not just happy paths. Mark each requirement with `requirement tested --evidence` describing what you observed.
+- Test every requirement and every plan item, not just happy paths. Mark each requirement with `tested REQ-n "<what you observed>"` (or `tested all "..."`) describing what you observed.
 - If expected behavior is missing or contradictory in the spec, stop that path and raise a blocker. Don't invent the expectation.
-- Every bug you file is one you reproduced: `bug add --ran` (or `--preexisting` when main already shows it and the change doesn't newly reach it).
-- One `bug add` per independently reproducible defect, with severity, exact spec reference, environment, minimal deterministic reproduction, expected and actual behavior, and bounded evidence. Reuse the same ID when a fix fails (`bug reopen`); never duplicate.
+- One `bug "<title>" --repro "<exact command>" --got "<output>"` per independently reproducible defect (add `--severity`, `--expected`, `--spec-ref`; `--preexisting` when main already shows it and the change doesn't newly reach it), with severity, exact spec reference, environment, minimal deterministic reproduction, expected and actual behavior, and bounded evidence. Reuse the same ID when a fix fails (`retest <BUG-ID> fail`); never duplicate.
 - Don't report preferences as bugs.
 
 ## 5. Retesting
 
 - Runtime bugs: retest from the original reproduction steps, then the nearest affected behavior for regressions. If the parent resumed you after a fix, rerun your own reproduction; don't re-onboard.
 - Code-review findings: run the fixer's regression test yourself and confirm it targets the defect. Where the defect has observable runtime behavior, also exercise it.
-- `bug verify` only when you observe the required behavior yourself; otherwise `bug reopen` with new evidence.
+- `retest <BUG-ID> ok "..."` only when you observe the required behavior yourself; otherwise `retest <BUG-ID> fail "<new evidence>"`.
 - After a fix round every requirement needs a fresh `tested` mark. When the fix diff is narrow (the brief's `Worktree:` line names it; add `--stat`), rerun the suites that cover the changed files plus the stack E2E, and mark the untouched requirements tested citing that run and the diff; retest everything when the diff is broad or touches shared code.
 - `closed_not_a_bug` is a decision for the parent and user. Propose it in your report.
 
 ## Handoff
 
-`handoff --to parent` (`--as tester` during parallel verify). The CLI sets `ready_for_acceptance` or `bugs_found`. Report tested surfaces, commands and toolkit tools used, bug IDs, tool gap IDs, coverage gaps, untested requirements, environment limits, blockers, and confirmation that you changed no spec or implementation file.
+`done "<what you ran>"`. The tracker sends the spec on to merge or to a fixer. Report tested surfaces, commands and toolkit tools used, bug IDs, tool gap IDs, coverage gaps, untested requirements, environment limits, blockers, and confirmation that you changed no spec or implementation file.

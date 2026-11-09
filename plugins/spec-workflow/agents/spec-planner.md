@@ -33,7 +33,7 @@ tracker plan add <feature> --from - <<'PLAN'
 PLAN
 ```
 
-Fix every error `plan add` reports and run it again (a new version supersedes the old one). Then run `tracker handoff <feature> --to parent --completed "plan vN: B batches" --remaining "assign --from-plan, then executor batch 1"`. If the spec is contradictory or unsafe, run `blocker add` and hand off to the parent instead. Never modify `specs/`, and never pass `--parent-confirmed`.
+Fix every error `plan add` reports and run it again (a new version supersedes the old one). Then run `<tracker> <ASSIGNMENT> done "plan vN: B batches"`. If the spec is contradictory or unsafe, run `<ASSIGNMENT> blocked "..."` instead. Never modify `specs/`, and never pass `--parent-confirmed`.
 
 Your final message (under 200 words): plan version, batches with their requirement IDs, ownership globs, risks turned into steps, facts you verified, and anything the parent must decide.
 

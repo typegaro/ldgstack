@@ -142,7 +142,7 @@ class GuidanceTest(unittest.TestCase):
         self.assertIn("Never route them to the toolsmith", planning)
         self.assertIn("tool-gap add --parent-confirmed", planning)
         self.assertIn("never for the toolsmith", self.read("agents/spec-planner.md"))
-        self.assertIn("--fresh", self.read("skills/spec-orchestrator/SKILL.md"))
+        self.assertIn("--fresh", self.read("skills/spec-orchestrator/references/manual-flow.md"))
 
     def test_reusable_tool_rule_is_everywhere(self) -> None:
         question = "could a different tester reuse this tool for a new scenario without editing it"

@@ -29,7 +29,7 @@ Also load `verification-map` now, `swarm` when you split verification into paral
 
 The parent's prompt gives you the specification path, the record feature name, the scope, its status, and the verified toolchain command prefix. Build your test plan from the spec before looking at the implementation. You have no file-editing tools on purpose. Use Bash only to build, run, and exercise the system and to call the tracker CLI. Never use it to modify code, tests, configuration, or specs.
 
-If you cannot execute the behavior under test, hand off to the parent with the reason. If a test capability is missing, record a tool gap (`tool-gap add`) rather than writing a throwaway script; tiny one-off probes are fine. Reading code is not verification. Never pass `--parent-confirmed`. Your final message is the handoff report defined in the `spec-tester` skill.
+If you cannot execute the behavior under test, `ask` the parent with the reason. If a test capability is missing, record it with `gap <capability> "<why>"` rather than writing a throwaway script; tiny one-off probes are fine. Reading code is not verification. Never pass `--parent-confirmed`. Your final message is the handoff report defined in the `spec-tester` skill.
 
 **Batch your reads (first rule of efficiency).** Every turn that only reads holds all the reads you already know you need, as parallel tool calls in ONE message; a lone read is only for a result that decides the next.
 Example: the first turn after `claim` reads, in ONE message, the spec section, `tracker requirement list <feature>`, and the 3-5 files your scope names (the brief's `First turn:` line).

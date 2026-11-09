@@ -58,7 +58,7 @@ result: violation count + bounded sample of offending IDs
 ## Using it
 
 - Run `overview` and `check all` before starting work and before handing off. A failing check is either a bug in the work or a pre-existing one; report it either way.
-- If a project's inspection CLI has no `check all` (a legacy CLI), record `check add --name inspect-check-all --result not_applicable --evidence "<reason>"` instead of `not_run`, and report the gap; adding it is a convention amendment for the user to approve.
+- If a project's inspection CLI has no `check all` (a legacy CLI), say so in your `done` summary instead of `not_run`, and report the gap; adding it is a convention amendment for the user to approve.
 - Verify a change by taking `snapshot <area>` before and after the action and diffing the `data`. Pin `--as-of` when comparing time-dependent results. If two snapshots of an unchanged system differ, that is a determinism bug in the CLI; fix it before trusting any diff.
 - Use structured commands over `sql`, and `sql` over guessing.
 - In the spec workflow: the implementer adds commands and checks, the reviewer verifies they exist and match the spec's invariants, and the tester records their output as evidence.

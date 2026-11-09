@@ -320,6 +320,14 @@ From the pilot 0082/0087/0088 run.
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
 
+## Changes in 0.16.0
+
+A simpler flow for agents and the orchestrator (worktree mode). Measured before: 66 tracker commands with 178 flags; in 10 days of runs agents made 5,063 tracker calls and 257 were refused, `bug add` (13 required flags) 19% of the time.
+
+- **Agents use their assignment and a few verbs**: `tracker <ASSIGNMENT> done "<summary>"`, `bug "<title>" --repro "<cmd>" --got "<output>"`, `fixed`, `tested`, `retest`, `ask`, `blocked`, `gap`, `stack -- <cmd>`. The assignment names the spec and the role, so no feature names, `--as`, or `--parent-confirmed`. `done` does the rest: marks a batch's requirements, commits, runs fast CI, opens the PR, picks a full or light re-verify for a fix, records a review or test round, and hands the spec on. Briefs list the role's verbs and show five phases (plan, build, verify, fix, merge) instead of internal statuses.
+- **The orchestrator runs `tracker next`**: it starts ready specs, imports requirements, creates worktrees, hands records on, assigns bugs, takes queue slots, queues merges, replaces stuck agents, and returns only the actions that need the orchestrator (launch an agent with its brief, answer a question, ask the user, run `tracker merge`). The orchestrator skill is one page (651 words, was 3,991); the tracker skill for agents is a verb table (611 words, was 2,049). The old procedure and every underlying command stay in `references/manual-flow.md` and `references/full-reference.md` for unusual cases.
+- Fixes found by the new end-to-end test: the tester's brief during parallel verify was refused; with a fast CI tier, `pr open` no longer requires a writer check before CI runs.
+
 ## Changes in 0.15.1
 
 - No file lanes for writers in worktree mode: an implementer, fixer, or toolsmith may edit any file in its own spec's checkout (the brief's `Ownership:` says so and lists the plan's paths only as where the work is). Executors no longer stop on a needed file outside the plan. `<repo>/main` stays read-only, another spec's checkout is still flagged, reviewers and testers stay read-only, and parallel executors of one spec are told which files their siblings are editing. Without worktrees (one shared tree) lanes work as before.

@@ -128,7 +128,7 @@ class AlongsideTest(LaneCase):
         active = {item["role"]: item for item in self.record(self.feature)["assignments"] if item["status"] == "active"}
         self.assertEqual((active["fixer"]["paths"], active["toolsmith"]["paths"]), (["fe/src/**"], ["tools/fault/**"]))
         self.assertEqual(self.tracker("status", self.feature)["result"]["side_role"], "toolsmith")
-        self.assertIn(f"join {self.feature}", self.brief(self.feature, "toolsmith").stdout)
+        self.assertIn('done "<tools built>"', self.brief(self.feature, "toolsmith").stdout)
         self.assertIn("handoff", self.brief(self.feature, "fixer").stdout)
 
         self.tracker("bug", "fixed", self.feature, "BUG-001", "--fix", "patched", "--regression", "test_x")

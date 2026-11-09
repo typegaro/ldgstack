@@ -457,3 +457,7 @@ Workspace-only specs (0120-0122, no be/fe commits): `pr open` and `handoff --to 
 ### 88. Serial review then test, unproven findings, stale verdicts, silent stalls (0.13.0)
 Review and test ran one after the other on every round; reviewer findings from reading blocked like proven ones; a commit after review and test passed the gate once fast CI reran; a merge-queue failure main shared was filed against the spec; stalled agents were noticed by hand.
 **Resolved (0.14.0):** parallel verify, patch-bound verdicts, `bug add --ran|--unproven|--preexisting`, `main_red`, `tracker stuck`, the decision log, and the quality skills (adapted from pstack).
+
+### 89. Too many commands and flags for agents (0.15.1)
+66 tracker commands with 178 flags; 257 of 5,063 agent tracker calls refused in 10 days, mostly usage errors (`bug add` 19%).
+**Resolved (0.16.0):** assignment verbs for agents, `tracker next` and `tracker merge` for the parent, one-page orchestrator and tracker skills.

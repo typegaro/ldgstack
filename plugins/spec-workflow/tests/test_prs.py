@@ -110,7 +110,7 @@ class PrOpenTest(PrCase):
         self.tracker("check", "add", FEATURE, "--name", "ci-fast", "--method", "x", "--result", "passed", "--evidence", "y", succeeds=False)
         self.tracker("assign", FEATURE, "--role", "implementer", "--paths", "be/internal/**", "--parent-confirmed")
         brief = self.tracker("brief", FEATURE, "--role", "implementer", "--parent-confirmed")["result"]
-        self.assertIn(f"pr open {FEATURE} --completed", brief)
+        self.assertIn("starts review and test", brief)
 
 
 class PrStatusTest(PrCase):

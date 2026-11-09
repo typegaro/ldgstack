@@ -363,7 +363,7 @@ class BatchLaneTest(WorktreeCase):
         brief = self.tracker("brief", FEATURE, "--role", "implementer", "--batch", "2")["result"]
         self.assertIn(f"Assignment: {second['assignment']}", brief)
         self.assertIn("parallel executors of this spec are editing be/internal/a.go, be/internal/keys/store.go: leave those files to them", brief)
-        self.assertIn(f"join {FEATURE} --assignment {second['assignment']}", brief)
+        self.assertIn(f"{second['assignment']} done", brief)
 
         # The batch-1 executor finishes first: a handoff would end batch 2's lane too, so only `join` is allowed (#78).
         lanes = lambda: {item["id"]: item["status"] for item in json.loads(  # noqa: E731

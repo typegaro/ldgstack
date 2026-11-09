@@ -62,7 +62,7 @@ Tester or reviewer, before writing any helper:
 
 1. Map each requirement to the capabilities it needs (happy path, edge cases, failures, UI, external services).
 2. `tracker toolkit list` and use what exists.
-3. For each missing capability: `tracker tool-gap add <feature> --capability <c> --requirement REQ-x [--requirement REQ-y] --why "<what cannot be tested>"`. Keep testing everything else, then hand off to the parent.
+3. For each missing capability: `<tracker> <ASSIGNMENT> gap <c> "<what cannot be tested>"`. Keep testing everything else, then hand off to the parent.
 
 A tiny one-off probe (a single `curl`, a few lines of inline script) is fine. Anything reused, or longer than about 30 lines, is a gap, not a scratchpad script.
 

@@ -43,33 +43,33 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 - Never swallow errors. Every error is returned, handled, or logged with its context. Every timeout and limit is explicit and deliberate; don't inherit them from shared clients by accident.
 - Follow the cross-cutting conventions in the convention specs (pagination, error shapes, status codes) exactly, even when a feature spec doesn't repeat them.
 - Add tests for requirements and failure paths, without inventing behavior absent from the spec.
-- Whenever persisted or runtime state changes, add or update the developer inspection CLI in the same work: commands for the new state, checks for every invariant the spec states, and suspicious-state categories for failure paths. Follow `dev-inspection`, and record the commands you ran with `check add`.
+- Whenever persisted or runtime state changes, add or update the developer inspection CLI in the same work: commands for the new state, checks for every invariant the spec states, and suspicious-state categories for failure paths. Follow `dev-inspection`, and name the commands you ran in your `done` summary.
 - When the change alters persisted or runtime state, UI flows (routes, accessible names, forms), or external integrations, update the toolkit tools that depend on them (`tracker toolkit list`) and their smoke tests in the same work, then `tracker toolkit update <name>` and `tracker toolkit verify <name>` (`test-toolkit`). Building new tools for tester gaps is the toolsmith's job, but the spec's own `## Testability` requirements are yours: build each as a reusable, generic command (subcommands, flags, JSON, `--help`), register and verify it, and name the tool, its `--help`, and its smoke check in the `requirement implemented` evidence.
 - No silent placeholders, mocked production behavior, disabled checks, or untracked follow-ups.
 - Don't overwrite, revert, reset, or clean changes you did not create. Edit what the brief's `Ownership:` allows: in worktree mode any file in your spec's checkout (edit what the change needs, including files the plan didn't list, and name them in your handoff); without worktrees, only your lane's paths.
 - After the parent resolves a blocker, re-read the specification before resuming; don't work from conversational memory.
 - Reading: `grep -n` to locate, then read one bounded range; never dump whole large files. After an edit, re-read only the edited range. Batch independent reads, greps, and status commands as parallel calls in one turn.
-- Batch assignment: implement only the listed requirement IDs. Unless the prompt says this is the final batch, end without a handoff; the parent resumes you (or a fresh implementer) with the next batch.
+- Batch assignment: implement only your batch's requirement IDs, then `done`; the parent starts the next batch.
 
 ## Executor mode (the brief carries a `Plan:`)
 
 - Follow the plan literally, batch by batch: its files, change shapes, tests, assertions, and commands. Don't redesign, reorder, or widen it.
 - Stop instead of improvising when a listed file or symbol is missing, a step contradicts the spec or another step, a needed file is outside Ownership (only without worktrees), or a test can't be written as specified: `tracker handoff <feature> --to parent --question "<what, where, options>"`. The parent answers (`tracker answer`) and the record comes back to you, or to the planner for a replan.
-- Mark requirements per batch: `requirement implemented` for each ID as its batch's "Done when" passes, and record its checks with the names the plan gives.
+- Run each batch's "Done when" checks before `done`; `done` marks the batch's requirements implemented with your summary.
 - Gaps you worked around anyway (a trivial missing import) go in your report so the planner learns.
 
 ## 4. Verification and handoff
 
-1. Mark each requirement with `requirement implemented --evidence --location`.
-2. Run formatting, generation, static analysis, architecture checks, and the unit and integration tests for what you changed (focused: the packages and pages your batch touches; the tester runs the full suite once), and record each with `check add`. Work and run commands only in the brief's `Worktree:` checkout; never edit `<repo>/main`, and never start the server against the dev database (use the isolated environment). Run independent checks at the same time:
+1. Write the `done` summary as the implementation evidence: what you built and where (files, symbols).
+2. Run formatting, generation, static analysis, architecture checks, and the unit and integration tests for what you changed (focused: the packages and pages your batch touches; the tester runs the full suite once), and name them in your `done` summary. Work and run commands only in the brief's `Worktree:` checkout; never edit `<repo>/main`, and never start the server against the dev database (use the isolated environment). Run independent checks at the same time:
    - use the project's parallel runner (`test.runner`) or background commands;
    - start the slow suites (e2e, audits) first, and do the quick checks while they run.
 
    New tests must be parallel-safe: isolated per worker and independent of order. Mark a test serial only with a one-line reason.
-3. Record a check you could not run as `not_run` with the reason, and name it in your report. It doesn't block review or test handoffs, but it blocks acceptance until it runs or the user waives it. Use `not_applicable` (with the reason) only for a check that does not apply.
+3. A check that applies but you could not run: `done --not-run "<check>: <why>"`. It doesn't block review or test handoffs, but it blocks acceptance until it runs or the user waives it. Use `not_applicable` (with the reason) only for a check that does not apply.
 4. Run the inspection CLI's `check all` (if it has none, record it as `not_applicable`). A violation is a bug to fix or report, never something to ignore.
 5. Run `spec-check`. Inspect the diff for unrelated edits, leaked secrets, generated-file drift, and boundary violations. Then clean it before review: `deslop` (narrating comments, speculative guards, dead code, duplicate helpers) and `no-comments` (a fresh comment reviewer), and rerun the focused tests.
-6. Worktree mode: `pr open <feature> --completed "..." --remaining "..."` (commits, conflict check against main, PR checks, fast CI, then the reviewer; on a refusal fix what it names and run it again). Otherwise `handoff --to reviewer` (this passes `ready-test` automatically). `--to parent` when blocked. Hand off `--to tester` only when the parent's prompt says so: the CLI allows it only after a passed review, when you implemented nothing but requirements added since that review.
+6. `done "<what you built>"`: after the last batch it commits, checks for conflicts with main, runs the fast CI tier, and starts review and test; a refusal keeps the work with you (fix what it names, then `done` again). Use `ask` when blocked by a question, `blocked` for a spec problem.
 
 ## Planner role
 
@@ -82,11 +82,11 @@ When assigned as fixer:
 - Fix only the parent-assigned bug IDs and the regressions they need.
 - Reproduce each bug from its recorded steps before changing code. Use `tdd` when a cheap focused test path exists: the failing test first, then the fix. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
 - Fix the root cause, not the place it surfaced (`fix-root-causes`); look for the same fault elsewhere in your lane and fix every instance. When two fixes resting on one belief fail, test the belief before a third (`attack-the-premise`).
-- Add a regression test that fails without the fix. Record `bug fixed` with the fix and that test.
+- Add a regression test that fails without the fix. Record `fixed <BUG-ID> "<how>" --test "<that test>"`.
 - Never verify your own fix.
-- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed and retested (in worktree mode `pr open` starts both at once, on the fix diff). Exception: when every bug you fixed is low and the fix is small (or only tests, config, or docs) and touches nothing sensitive, end with `pr open --light "<why>"` (`handoff --to tester --light` without CI); the tracker measures the diff and refuses otherwise, then use the plain command.
-- A stack E2E (anything that starts the shared stack) runs inside `tracker queue hold test --feature <feature> --class stack --run "<command>"`, so it never overlaps a tester's run.
-- A merge-conflict or merge-queue CI bug: in your worktree, `git merge <main>`, resolve, rerun the focused tests, record the resolution as the fix, then `pr open`. Name the resolved files in your report: a fresh focused review checks them.
+- Run the relevant checks, then `done "<what you fixed>"`: it opens the PR, and the tracker chooses a full re-verify or (a small low-severity fix touching nothing sensitive) a light one straight to retest.
+- A stack E2E (anything that starts the shared stack) runs through `stack -- <command>`, so it never overlaps a tester's run.
+- A merge-conflict or merge-queue CI bug: in your worktree, `git merge <main>`, resolve, rerun the focused tests, record the resolution as the fix, then `done`. Name the resolved files in your report: a fresh focused review checks them.
 
 ## Completion report
 
