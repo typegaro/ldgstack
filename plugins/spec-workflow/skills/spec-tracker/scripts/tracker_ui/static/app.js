@@ -526,7 +526,14 @@ function queuesView() {
   const card = (key, title, extra) => {
     const data = q.queues[key] || { slots: {}, holders: [], waiting: [] };
     const classes = Object.keys(data.slots || {});
-    const chips = classes.map((c) => lbl(`${c === "default" ? "slots" : c} ${data.holders.filter((x) => (x.class || "default") === c).length}/${data.slots[c]}`));
+    const chips = classes.map((c) => {
+      const auto = (data.auto || {})[c];
+      const text = `${c === "default" ? "slots" : c} ${data.holders.filter((x) => (x.class || "default") === c).length}/${data.slots[c]}`;
+      if (!auto) return lbl(text);
+      const node = lbl(`${text} · auto${auto.extra === null || auto.extra === undefined ? "" : `, room for ${auto.extra} more`}`, auto.extra ? "good" : "warn");
+      if (auto.limit) node.title = `limited by ${auto.limit}`;
+      return node;
+    });
     const items = [
       ...data.holders.map((x) => h("div", { class: "item" }, h("span", { class: "dot dot-" + key }), featureLink(x.feature),
         span("meta", `${x.class && x.class !== "default" ? x.class + " · " : ""}${dur(since(x.since))}`))),

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import capacity
 from . import paths as lanes
 from . import plan as plans
 from .model import now
@@ -164,9 +165,14 @@ def sync(root: Path, config: Record, records: list[Record] | None = None) -> Rec
             state["queues"][queue]["holds"] = holds
         used = {name: sum(item["state"] in TAKEN and item["class"] == name for item in items) + sum(hold["class"] == name for hold in holds)
                 for name in slots}
+        reading = capacity.machine() if config.get("auto_slots", {}).get(queue) else None
         for item in ordered(items):
             blocked = (found[item["feature"]].get("pr") or {}).get("blocking") if queue != "merge" else None
-            if item["state"] == "waiting" and not blocked and used[item["class"]] < slots[item["class"]]:
+            if item["state"] != "waiting" or blocked:
+                continue
+            extra = capacity.room(config, queue, item["class"], capacity.recent(items, holds, item["class"], moment, config["capacity"]["warmup"], parse),
+                                  reading)["extra"] if reading else None
+            if capacity.allowed(config, queue, item["class"], used[item["class"]], extra):
                 item.update(state="granted", granted_at=timestamp)
                 used[item["class"]] += 1
     if json.dumps(state, sort_keys=True) != before:
@@ -189,9 +195,14 @@ def live(hold: Record, config: Record, moment: datetime) -> bool:
 
 def free(state: Record, config: Record, queue: str, queue_class: str) -> bool:
     """Whether a slot of the class is free for a hold (granted items and other holds count as taken)."""
-    taken = sum(item["state"] in TAKEN and item["class"] == queue_class for item in state["queues"][queue]["items"])
-    taken += sum(hold["class"] == queue_class for hold in state["queues"][queue].get("holds", []))
-    return taken < config["slots"][queue][queue_class]
+    items, holds = state["queues"][queue]["items"], state["queues"][queue].get("holds", [])
+    taken = sum(item["state"] in TAKEN and item["class"] == queue_class for item in items)
+    taken += sum(hold["class"] == queue_class for hold in holds)
+    extra = None
+    if queue_class in config.get("auto_slots", {}).get(queue, {}):
+        moment = parse(now())
+        extra = capacity.room(config, queue, queue_class, capacity.recent(items, holds, queue_class, moment, config["capacity"]["warmup"], parse))["extra"]
+    return capacity.allowed(config, queue, queue_class, taken, extra)
 
 
 def positions(items: list[Record]) -> dict[str, int]:
@@ -222,6 +233,12 @@ def view(state: Record, config: Record, records: list[Record], root: Path) -> Re
                        if item["feature"] in found and (found[item["feature"]].get("pr") or {}).get("blocking") and queue != "merge" else {})}
                    for item in ordered(items) if item["state"] not in TAKEN]
         queues[queue] = {"slots": dict(config["slots"][queue]), "holders": holders, "waiting": waiting}
+        autos = config.get("auto_slots", {}).get(queue, {})
+        if autos:
+            moment = parse(now())
+            queues[queue]["auto"] = {name: {"min": need["min"], "max": need["max"], **capacity.room(
+                config, queue, name, capacity.recent(items, state["queues"][queue].get("holds", []), name, moment, config["capacity"]["warmup"], parse))}
+                for name, need in autos.items()}
         if state["queues"][queue].get("holds"):
             queues[queue]["holds"] = state["queues"][queue]["holds"]
         if queue == "merge":

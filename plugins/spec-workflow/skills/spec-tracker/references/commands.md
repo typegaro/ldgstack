@@ -14,6 +14,7 @@ tracker bug add 0000-project-bootstrap --title "..." --severity high --spec-ref 
   --reproduction "<command>" --expected "..." --actual "<output>" --evidence "..." --ran   # or --unproven / --preexisting
 tracker check add 0000-project-bootstrap --name code-review ... --as reviewer      # parallel verify: --as reviewer|tester
 tracker handoff 0000-project-bootstrap --to parent --as tester --completed "..." --remaining "..."   # each verify role ends so
+tracker capacity                                                                   # free memory, load, room for more runs per auto slot class
 tracker stuck                                                                      # idle assignments, with the retry rule
 tracker decision add --feature 0000-project-bootstrap --decision "..." --why "..." --evidence "..."   # --waiting --pick --risk
 tracker decision list --waiting ; tracker decision resolve D-001 --answer "<the user's words>"

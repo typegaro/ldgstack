@@ -16,6 +16,8 @@ accepted code and `<repo>/<branch>` per spec. Shared by the tracker, the path-gu
 `test_slots: N` is `{"test": {"default": N}}`. CI commands run in `<repo>/<branch>`, hooks from the project root.
 `registries` adds `own` files (a migration index, a check-count test) to any plan or batch lane that touches `when`.
 `light_fix` sets when a fixer may send a low-severity fix straight to retest (`handoff --to tester --light`).
+A slot class may be `{"auto": true, "min": 1, "max": 3, "memory": "4G", "cpus": 2}` (the cost of one run): it grants a
+slot only while free memory and CPU cover one more run after `capacity` (`reserve_memory` 2G, `reserve_cpus` 1, `warmup` 3m).
 `verify` is `parallel` (a writer's handoff to review starts the reviewer and the tester on the same patch) or `sequential`.
 
 Lane globs stay repo-relative (`be/internal/**`); in a worktree they select `be/<branch>/internal/**`."""
@@ -56,7 +58,8 @@ def load(root: Path) -> dict[str, Any] | None:
               "env": data.get("env") or {}}
     if not isinstance(config["test_slots"], int) or config["test_slots"] < 1:
         raise WorkspaceError(f'{CONFIG}: "test_slots" must be a positive integer')
-    config.update(slots=slot_config(data.get("slots") or {}, config["test_slots"]), lease=seconds(data.get("lease", "2h"), "lease"),
+    caps, autos = split_auto(slot_config(data.get("slots") or {}, config["test_slots"]))
+    config.update(slots=caps, auto_slots=autos, capacity=capacity_config(data.get("capacity") or {}), lease=seconds(data.get("lease", "2h"), "lease"),
                   ci=ci_config(data.get("ci") or {}, repos), ci_timeout=seconds(data.get("ci_timeout", 1800), "ci_timeout"),
                   hooks=hook_config(data.get("hooks") or {}), registries=registry_config(data.get("registries") or []),
                   light_fix=light_fix_config(data.get("light_fix") or {}), verify=data.get("verify", "parallel"))
@@ -73,13 +76,54 @@ def seconds(value: Any, key: str) -> int:
     return int(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
 
 
-def slot_classes(value: Any, key: str) -> dict[str, int]:
+def megabytes(value: Any, key: str) -> int:
+    """A size in MB: a number of MB, or `512M`, `4G`."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([MmGg]?)[Bb]?", str(value).strip()) if isinstance(value, (int, float, str)) and not isinstance(value, bool) else None
+    if not match:
+        raise WorkspaceError(f'{CONFIG}: "{key}" must be a size such as 4096, "512M" or "4G"')
+    return int(float(match.group(1)) * (1024 if match.group(2).lower() == "g" else 1))
+
+
+def auto_class(value: Any, key: str) -> dict[str, int]:
+    """`{"auto": true, "max": 3, "min": 1, "memory": "4G", "cpus": 2}`: slots granted while the machine has room."""
+    if set(value) - {"auto", "max", "min", "memory", "cpus"} or value.get("auto") is not True:
+        raise WorkspaceError(f'{CONFIG}: "slots.{key}" auto class takes "auto": true, "max", "min", "memory", "cpus"')
+    top, low = value.get("max", 4), value.get("min", 1)
+    if not all(isinstance(item, int) and not isinstance(item, bool) and item >= 1 for item in (top, low)) or low > top:
+        raise WorkspaceError(f'{CONFIG}: "slots.{key}" needs 1 <= min <= max')
+    cpus = value.get("cpus", 0)
+    if not isinstance(cpus, (int, float)) or isinstance(cpus, bool) or cpus < 0:
+        raise WorkspaceError(f'{CONFIG}: "slots.{key}.cpus" must be a number of cores')
+    memory = megabytes(value["memory"], f"slots.{key}.memory") if "memory" in value else 0
+    if not memory and not cpus:
+        raise WorkspaceError(f'{CONFIG}: "slots.{key}" auto class needs the cost of one run: "memory" and/or "cpus"')
+    return {"max": top, "min": low, "memory_mb": memory, "cpus": cpus}
+
+
+def slot_classes(value: Any, key: str) -> dict[str, Any]:
     classes = {"default": value} if isinstance(value, int) else value
     if not isinstance(classes, dict) or not classes or not all(
-            isinstance(name, str) and NAME.match(name) and isinstance(count, int) and not isinstance(count, bool) and count >= 1
+            isinstance(name, str) and NAME.match(name) and (isinstance(count, dict) or (isinstance(count, int) and not isinstance(count, bool) and count >= 1))
             for name, count in classes.items()):
-        raise WorkspaceError(f'{CONFIG}: "slots.{key}" must be a positive integer or {{"<class>": <positive integer>, ...}}')
-    return dict(classes)
+        raise WorkspaceError(f'{CONFIG}: "slots.{key}" must be a positive integer or {{"<class>": <positive integer or auto class>, ...}}')
+    return {name: auto_class(count, f"{key}.{name}") if isinstance(count, dict) else count for name, count in classes.items()}
+
+
+def split_auto(slots: dict[str, dict[str, Any]]) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, dict[str, int]]]]:
+    """Slots as caps (an auto class caps at its max), and the auto classes' costs."""
+    caps = {queue: {name: value["max"] if isinstance(value, dict) else value for name, value in classes.items()} for queue, classes in slots.items()}
+    autos = {queue: {name: value for name, value in classes.items() if isinstance(value, dict)} for queue, classes in slots.items()}
+    return caps, {queue: classes for queue, classes in autos.items() if classes}
+
+
+def capacity_config(raw: Any) -> dict[str, int]:
+    if not isinstance(raw, dict) or set(raw) - {"reserve_memory", "reserve_cpus", "warmup"}:
+        raise WorkspaceError(f'{CONFIG}: "capacity" takes "reserve_memory", "reserve_cpus", "warmup"')
+    cpus = raw.get("reserve_cpus", 1)
+    if not isinstance(cpus, (int, float)) or isinstance(cpus, bool) or cpus < 0:
+        raise WorkspaceError(f'{CONFIG}: "capacity.reserve_cpus" must be a number of cores')
+    return {"reserve_memory_mb": megabytes(raw.get("reserve_memory", "2G"), "capacity.reserve_memory"), "reserve_cpus": cpus,
+            "warmup": seconds(raw.get("warmup", "3m"), "capacity.warmup")}
 
 
 def slot_config(raw: Any, test_slots: int) -> dict[str, dict[str, int]]:

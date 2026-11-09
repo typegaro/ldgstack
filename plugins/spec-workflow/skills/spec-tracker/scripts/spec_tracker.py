@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tracker import brief as briefs
-from tracker import ci, deps, fixround, queues, supervise, toolkit
+from tracker import capacity, ci, deps, fixround, queues, supervise, toolkit
 from tracker import paths as lanes
 from tracker import plan as plans
 from tracker import requirements as spec_requirements
@@ -278,6 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     ran.add_argument("queue", choices=("merge",))
     ran.add_argument("--parent-confirmed", action="store_true")
 
+    commands.add_parser("capacity", help="the machine's free memory and load, and how many more runs each auto slot class allows now")
     stalled = commands.add_parser("stuck", help="active assignments with no claim, record write, or commit past their role's usual run time")
     stalled.add_argument("--role", choices=[role for role in ROLES if role != "parent"])
     decisions = commands.add_parser("decision", help="the program's append-only decision log; calls waiting on the user").add_subparsers(
@@ -2109,6 +2110,22 @@ def queue_command(root: Path, args: argparse.Namespace) -> Any:
         return queue_add(root, config, args)
 
 
+def capacity_command(root: Path, _args: argparse.Namespace) -> Record:
+    config = workspace_config(root)
+    assert config is not None
+    with project_lock(root):
+        state = queues.sync(root, config)
+        view = queues.view(state, config, load_all(root), root)["queues"]
+    classes = {}
+    for queue, data in view.items():
+        for name, cap in data["slots"].items():
+            used = sum(1 for item in data["holders"] if item["class"] == name) + sum(1 for hold in data.get("holds", []) if hold["class"] == name)
+            auto = (data.get("auto") or {}).get(name)
+            classes[f"{queue}.{name}"] = {"used": used, "max": cap, **({"min": auto["min"], "more_now": auto["extra"], "limit": auto.get("limit")}
+                                                                       if auto else {"mode": "fixed"})}
+    return {"machine": capacity.machine(), "reserve": config["capacity"], "classes": classes}
+
+
 def queue_add(root: Path, config: Record, args: argparse.Namespace) -> Record:
     require_confirmation(args.parent_confirmed, "queue add")
     record = load(root, args.feature)
@@ -2294,7 +2311,7 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
     "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
     "pr": pr_command, "ci": ci_command, "queue": queue_command, "ui": ui_command,
-    "stuck": lambda root, args: supervise.stuck(root, args.role), "decision": supervise.decision,
+    "stuck": lambda root, args: supervise.stuck(root, args.role), "capacity": capacity_command, "decision": supervise.decision,
 }
 # Long-running commands take the project lock per step, so CI runs and waits never block other agents' tracker calls.
 LOCK_FREE = {"pr", "ci", "queue", "ui"}

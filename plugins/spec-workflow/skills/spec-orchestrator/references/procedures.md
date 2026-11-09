@@ -41,7 +41,8 @@ project/  specs/  implementation/workspace.json
 {"repos": ["be", "fe"], "main": "main", "branch": "spec-{id}-{slug}",
  "copy": {"be": [".env"]}, "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}},
  "setup": {"be": ["direnv allow"], "fe": ["direnv allow", "direnv exec . npm ci"]},
- "slots": {"review": 2, "test": {"stack": 1, "browser": 2}}, "lease": "2h",
+ "slots": {"review": 2, "test": {"stack": {"auto": true, "min": 1, "max": 3, "memory": "6G", "cpus": 3}, "browser": 2}}, "lease": "2h",
+ "capacity": {"reserve_memory": "2G", "reserve_cpus": 1, "warmup": "3m"},
  "ci": {"fast": {"be": ["direnv exec . go build ./...", "direnv exec . go vet ./..."], "fe": ["direnv exec . npm run typecheck"]}},
  "hooks": {"duplicate_numbers": [{"glob": "be/db/migrations/*.sql", "pattern": "^(\\d+)"}],
            "pr_check": [], "pre_merge": [], "post_merge": ["make -C docker deploy"]},
@@ -51,6 +52,7 @@ project/  specs/  implementation/workspace.json
 ```
 
 - **Registries:** files that change whenever a lane adds a certain kind of file (a migration index beside a new migration, a check-count test beside a new inspection check). `plan add` adds each rule's `own` files to the ownership when it touches `when`, and `assign --from-plan --batch N` adds them to the batch lane, so the executor never stops on them. A batch's `**Files:**` outside the Ownership are added to it too (with a warning).
+- **Auto slots:** a class written as `{"auto": true, "min", "max", "memory", "cpus"}` (the cost of one run) grants a slot only while free memory and CPU (MemAvailable, the 1-minute load average) cover one more run after `capacity.reserve_memory` (default 2G) and `reserve_cpus` (1). Runs granted within `warmup` (3m) count their full cost, since their stack may not have started; granted slots are never revoked; `min` always holds and `max` caps. Measure one run's cost once (peak `docker stats` or `/usr/bin/time -v` of the stack E2E) and set it slightly above. `tracker capacity` shows the reading and each class's headroom; `SPEC_WORKFLOW_MACHINE` overrides the reading.
 - **Parallel verify:** `verify` is `parallel` (default) or `sequential`. In parallel mode a writer's PR (`pr open`, or `handoff --to reviewer`) sets `ready_for_verify`: the reviewer holds the record and the tester works beside it on a read-only lane, both on the same patch; each passes `--as` on role commands and ends with `handoff --to parent --as <role>`; the last one returns the record. Open tool gaps keep the tester out (review runs alone). Every reviewer and tester check stores `patch` (per repo `git patch-id --stable` of `main...branch`), and acceptance compares it with the branch.
 - **Main is red:** when the merge queue's fast CI fails after its retry, the failing command is rerun on `<repo>/main`. If main fails too, the result is `main_red`: no bug, the item stays queued, and the failed check is marked so it doesn't block the spec. Fix main, then run the queue again.
 - **Light fix rounds:** `light_fix` (`max_lines`, default 20; `paths`, default tests, docs, and JSON/YAML/TOML config; `sensitive`, added to built-in auth, secret, crypto, credential, permission, session, lock, lease, transaction, migration, and SQL patterns) decides when `handoff --to tester --light` is allowed: every fixed bug low, a normal-risk record, no merge resolution, no sensitive file, and either at most `max_lines` changed lines or only `paths` files, measured from the branch heads when the fix round started.
