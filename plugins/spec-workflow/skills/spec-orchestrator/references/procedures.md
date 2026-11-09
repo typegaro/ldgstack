@@ -47,10 +47,12 @@ project/  specs/  implementation/workspace.json
            "pr_check": [], "pre_merge": [], "post_merge": ["make -C docker deploy"]},
  "registries": [{"when": ["be/db/migrations/*.sql"], "own": ["be/db/migrations/source.go"]},
                 {"when": ["be/internal/inspection/checks/**"], "own": ["be/internal/inspection/checks_integration_test.go"]}],
- "light_fix": {"max_lines": 20}}
+ "light_fix": {"max_lines": 20}, "verify": "parallel"}
 ```
 
 - **Registries:** files that change whenever a lane adds a certain kind of file (a migration index beside a new migration, a check-count test beside a new inspection check). `plan add` adds each rule's `own` files to the ownership when it touches `when`, and `assign --from-plan --batch N` adds them to the batch lane, so the executor never stops on them. A batch's `**Files:**` outside the Ownership are added to it too (with a warning).
+- **Parallel verify:** `verify` is `parallel` (default) or `sequential`. In parallel mode a writer's PR (`pr open`, or `handoff --to reviewer`) sets `ready_for_verify`: the reviewer holds the record and the tester works beside it on a read-only lane, both on the same patch; each passes `--as` on role commands and ends with `handoff --to parent --as <role>`; the last one returns the record. Open tool gaps keep the tester out (review runs alone). Every reviewer and tester check stores `patch` (per repo `git patch-id --stable` of `main...branch`), and acceptance compares it with the branch.
+- **Main is red:** when the merge queue's fast CI fails after its retry, the failing command is rerun on `<repo>/main`. If main fails too, the result is `main_red`: no bug, the item stays queued, and the failed check is marked so it doesn't block the spec. Fix main, then run the queue again.
 - **Light fix rounds:** `light_fix` (`max_lines`, default 20; `paths`, default tests, docs, and JSON/YAML/TOML config; `sensitive`, added to built-in auth, secret, crypto, credential, permission, session, lock, lease, transaction, migration, and SQL patterns) decides when `handoff --to tester --light` is allowed: every fixed bug low, a normal-risk record, no merge resolution, no sensitive file, and either at most `max_lines` changed lines or only `paths` files, measured from the branch heads when the fix round started.
 
 - **Adopt** (with the user, between specs, no agent running): commit or stash each repo, then `mv be be.tmp && mkdir be && mv be.tmp be/main` per repo, update paths that pointed at `be/` (scripts, compose files, project instructions), write `workspace.json`, run `spec preflight` (it runs `cd <repo>` commands in `<repo>/main`).

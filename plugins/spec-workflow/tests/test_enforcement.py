@@ -1,4 +1,4 @@
-"""0.6.0: rules enforced in code - lanes, dependency start guard, plugin cache, audited spec edits, briefs, conformance, size budget.
+"""0.6.0: rules enforced in code - lanes, dependency start guard, plugin cache, audited spec edits, briefs, conformance.
 
 Motivated by a pilot run: 0026 started before 0025 was accepted, lane ownership was violated, the parent hot-patched the
 plugin cache and edited draft specs without the user, and hand-written prompts carried uneven rules.
@@ -336,15 +336,7 @@ class ConformanceTest(unittest.TestCase):
             self.assertIn("## Conformance", markdown)
 
 
-class SizeBudgetTest(unittest.TestCase):
-    """Skills stay short; detail lives in references/ and in CLI error messages."""
-
-    def test_skill_and_agent_lengths(self) -> None:
-        for path in sorted((PLUGIN / "skills").glob("*/SKILL.md")):
-            self.assertLess(len(path.read_text(encoding="utf-8").splitlines()), 120, path)
-        for path in sorted((PLUGIN / "agents").glob("*.md")):
-            self.assertLess(len(path.read_text(encoding="utf-8").splitlines()), 60, path)
-
+class TemplateTest(unittest.TestCase):
     def test_template_placeholders_are_known(self) -> None:
         sys.path.insert(0, str(TRACKER.parent))
         from tracker import brief

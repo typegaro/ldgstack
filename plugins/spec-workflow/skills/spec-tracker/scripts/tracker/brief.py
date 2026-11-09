@@ -240,7 +240,8 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
            confirmed: bool = False) -> str:
     feature = record["feature"]
     tracker = f"python3 {SCRIPTS / 'spec_tracker.py'}"
-    side = record.get("side_role") == role
+    verify = record.get("status") == "ready_for_verify" and role in ("reviewer", "tester")
+    side = record.get("side_role") == role and not verify
     if record["current_role"] != role and not side:
         raise TrackerError(f"the record is with the {record['current_role']}; run `{tracker} handoff {feature} --to {role} ...` first")
     if batch and role != "implementer":
@@ -276,8 +277,11 @@ def render(root: Path, record: dict[str, Any], role: str, batch: str | None, fin
         "ownership": ownership, "toolchain": toolchain(root, config, tree["branch"] if tree else None), "tracker": tracker,
         "worktree": worktree(record, config, role), "risk": record.get("risk", "normal"),
         "toolkit": "\n".join(f"  - {line}{' (stale)' if line.split(' ', 1)[0] in kit['stale'] else ''}" for line in kit["lines"]) or "  none registered",
-        "gaps": "; ".join(gaps) or "none", "next_command": next_command(tracker, feature, role, final, batch, side, own["id"], bool(siblings) and role == "implementer",
-                                                                   bool(tree and config)),
+        "gaps": "; ".join(gaps) or "none", "next_command": (
+            f'{tracker} handoff {feature} --to parent --as {role} --completed "..." --remaining "..."   (parallel verify: the reviewer and the '
+            f'tester work on this patch at once; pass --as {role} on check add and bug add too; the last one returns the record)'
+            if verify else next_command(tracker, feature, role, final, batch, side, own["id"], bool(siblings) and role == "implementer",
+                                        bool(tree and config))),
     }
     try:
         return template().format(**values).rstrip() + "\n"

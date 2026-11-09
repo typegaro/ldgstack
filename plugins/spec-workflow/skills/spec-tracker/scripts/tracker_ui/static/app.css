@@ -245,3 +245,8 @@ tr:last-child td { border-bottom: 0; }
 .steps .step-now { color: var(--text); font-weight: 600; } .steps .step-now .mark { color: var(--accent); }
 .steps .step-blocked { color: var(--red-text); }
 .steps .step-todo { color: var(--muted); }
+
+/* Waiting on you: calls only the user can make, and stuck agents */
+.attention { border-color: #5a4224; margin-bottom: 14px; }
+.attention .detail { display: flex; flex-direction: column; gap: 4px; }
+tr.stalled td { color: var(--amber-text); }

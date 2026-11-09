@@ -53,6 +53,14 @@ Agents inherit your default model. Set the tiers per agent, e.g. `"agent": {"spe
 | Skill | `spec-tracker` | `spec_tracker.py` record CLI, gates, severity scale, blocker format |
 | Skill | `workflow-retro` | `retro.py`: deterministic token/friction/effectiveness metrics from transcripts and records, ranked improvements |
 | Skill | `spec-implementer` / `spec-reviewer` / `spec-tester` | Role rules |
+| Skill | `engineering-principles` | Named principles cited in briefs, handoffs, bugs, and reviews (smallest-change, data-shape-first, fix-root-causes, test-behavior, boundary-discipline, ...) |
+| Skill | `deslop` / `no-comments` / `unslop` / `technical-writing` | Code and prose cleanup before review: slop, comments (reviewed by a fresh agent), AI tells, docs, PRs, commits |
+| Skill | `tdd` / `go-practices` / `typescript-practices` | Test-first bug fixes; concrete language rules |
+| Skill | `how` / `why` / `blast-radius` | Grounding: how a subsystem works, why it is that way (cited), what a change can break (proven by a run) |
+| Skill | `interrogate` / `arena` / `swarm` / `architect` | Adversarial review kept to run-proven findings; parallel attempts with a cross-model judge; fan-out with one report; design twice before code |
+| Skill | `verification-map` / `formal-verification` / `benchmark-checklist` | Per-feature map for proving behavior (with drift maintenance); model-checked or property-tested invariants; vetting measured numbers |
+| Skill | `correct` / `catch-up` / `prototype` / `sharpen` | Turn repeated corrections into checks; catch the user up with waiting calls; settle empirical questions by prototype; restate and deepen a request |
+| Agent | `comment-reviewer` | Read-only comment verdicts for `no-comments` |
 | Agent | `spec-planner` (deep-reasoning tier) | Read-only planner: stores a batched plan with `tracker plan add` |
 | Agent | `spec-implementer` (executor), `spec-fixer` (execution tier) | Code-editing roles |
 | Agent | `spec-toolsmith` | Builds toolkit tools for recorded tool gaps; edits toolkit locations only |
@@ -311,6 +319,19 @@ From the pilot 0082/0087/0088 run.
 ## Changes in 0.12.1
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
+
+## Changes in 0.14.0
+
+Speed and rigor ideas adapted from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT, see NOTICE), enforced by the tracker where possible.
+
+- **Parallel verify** (worktree mode, `verify: parallel`, the default): a writer's PR starts the reviewer and the tester on the same patch at once (`ready_for_verify`); each passes `--as reviewer|tester` and ends with `handoff --to parent --as <role>`, and the last one returns the record. `verify: sequential` keeps review then test.
+- **Verdicts bound to the patch**: reviewer and tester checks store the branch's `git patch-id`; acceptance needs a passing review and test of the patch that would land. A clean merge of main keeps them; a commit after them needs both again (before, a late commit only needed fast CI).
+- **Proven findings**: `bug add` takes `--ran`, `--unproven`, or `--preexisting`. Unproven low and medium findings and preexisting ones are filed as follow-ups; only proven findings (and unproven high or critical ones, for the parent to weigh) block.
+- **Main is red**: a merge-queue CI failure that main shares returns `main_red`, files no bug, and keeps the item queued.
+- **Supervision**: `tracker stuck` flags assignments idle past twice their role's usual run time (from history); the orchestrator retries by cause and replans after two retries, runs one unit first after changes, and keeps an hourly audit tick.
+- **Decision log**: `tracker decision add|list|resolve` (implementation/decisions.jsonl), with `--waiting` calls only the user can make (pick and risk). The dashboard shows waiting calls and stuck agents under "Waiting on you".
+- The skill and agent line-count limit (a test) is gone: length is never a goal.
+- **Quality skills**: engineering-principles, deslop, no-comments (with the `comment-reviewer` agent), unslop, technical-writing, tdd, go-practices, typescript-practices, how, why, blast-radius, interrogate, arena, swarm, architect, verification-map, formal-verification, benchmark-checklist, correct, catch-up, prototype, sharpen. Briefs ask every agent to restate the goal and name the quality steps; workflow-retro reviews from three angles and prefers structural fixes.
 
 ## Changes in 0.13.0
 

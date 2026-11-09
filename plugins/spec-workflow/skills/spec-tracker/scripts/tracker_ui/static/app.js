@@ -10,7 +10,7 @@ const STAGE_PILL = { implementing: "impl", planning: "plan", review: "review", t
 const STAGE_LABEL = Object.fromEntries(STAGES);
 const EVENT_ICONS = { created: "P", plan: "◇", work: "▲", check_pass: "✓", check_fail: "!", check_other: "○", question: "?", answer: "A", generation: "↻", merge: "⇢", spec: "S" };
 
-const store = { meta: null, prs: null, queues: null, specs: null, backlog: null };
+const store = { meta: null, prs: null, queues: null, specs: null, backlog: null, attention: null };
 const view = { prState: "open", prFilter: "", prStatus: "", prArea: "", stage: "all", kind: "all", tab: "", token: 0, live: false, pending: false };
 
 // DOM helpers ---------------------------------------------------------------------------------------------
@@ -95,9 +95,9 @@ async function api(path) {
 }
 
 async function loadBase() {
-  const [meta, prs, queues, specs, backlog] = await Promise.all([api("/api/meta"), api("/api/prs"), api("/api/queues"), api("/api/specs"),
-    api("/api/backlog")]);
-  Object.assign(store, { meta, prs, queues, specs, backlog });
+  const [meta, prs, queues, specs, backlog, attention] = await Promise.all([api("/api/meta"), api("/api/prs"), api("/api/queues"), api("/api/specs"),
+    api("/api/backlog"), api("/api/attention")]);
+  Object.assign(store, { meta, prs, queues, specs, backlog, attention });
 }
 
 const prList = () => (store.prs ? store.prs.prs : []);
@@ -317,7 +317,24 @@ function pullsParts(prs, redraw) {
   const banner = store.prs && !store.prs.pr_status_available
     ? h("p", { class: "banner", text: "Work data comes from the implementation records (no `pr status` command in this tracker yet), so branch diff stats and fast-CI results are not shown." })
     : null;
-  return [banner, toolbar, box, note];
+  return [banner, attentionBox(), toolbar, box, note];
+}
+
+/** Calls only the user can make (with the parent's pick and risk), and agents that stopped making progress. */
+function attentionBox() {
+  const a = store.attention;
+  if (!a || (!a.waiting.length && !a.stuck.length)) return null;
+  const featureLink = (feature) => (feature ? link("#/item/" + encodeURIComponent(feature), "#" + feature.slice(0, 4)) : span("meta", "program"));
+  const calls = a.waiting.map((row) => h("div", { class: "detail" },
+    h("div", { class: "titleline" }, featureLink(row.feature), " ", h("strong", { text: row.decision }), " ", when(row.at)),
+    h("span", {}, span("meta", "Pick: "), row.pick || "–"), h("span", {}, span("meta", "Risk: "), row.risk || "–"),
+    row.why ? span("meta", row.why) : null, span("meta mono", `answer: tracker decision resolve ${row.id} --answer "..."`)));
+  const stuck = a.stuck.map((row) => h("div", { class: "item-row" }, span("t-warn", "!"),
+    h("div", { class: "grow" }, h("span", {}, featureLink(row.feature), ` ${row.role} has done nothing for ${dur(row.idle_seconds)}`),
+      span("meta", `usual run ${dur(row.stuck_after_seconds / 2)}, last sign: ${row.last_signal} · ${row.assignment}`))));
+  return h("section", { class: "box attention", "aria-label": "Waiting on you" },
+    h("div", { class: "box-head" }, h("strong", { text: "Waiting on you" }), lbl(String(a.waiting.length + a.stuck.length))),
+    calls, stuck);
 }
 
 function select(id, label, options, value, onchange) {
@@ -526,7 +543,8 @@ function queuesView() {
     card("merge", "Merge", (d) => [waitingForMerge(d), mergeLast(d)]));
   const mergeCard = cards.lastChild;
   mergeCard.append(h("div", { class: "item" }, span("meta", `After a merge: re-check ${openPrs().length} items in progress for conflicts`)));
-  const rows = q.agents.map((a) => h("tr", {}, h("td", { text: a.role }), h("td", {}, link("#/item/" + encodeURIComponent(a.feature), "#" + a.feature.slice(0, 4))),
+  const stalled = new Set(((store.attention || {}).stuck || []).map((row) => row.assignment));
+  const rows = q.agents.map((a) => h("tr", { class: stalled.has(a.assignment) ? "stalled" : null }, h("td", {}, a.role, stalled.has(a.assignment) ? [" ", lbl("stuck", "warn")] : null), h("td", {}, link("#/item/" + encodeURIComponent(a.feature), "#" + a.feature.slice(0, 4))),
     h("td", { text: a.model || "–" }), h("td", { class: "mono-soft", text: a.assignment + (a.batch ? ` · batch ${a.batch}` : "") }),
     h("td", { text: a.claimed_at ? new Date(a.claimed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "–" }),
     h("td", { text: dur(since(a.claimed_at)) })));

@@ -21,10 +21,12 @@ Transcripts default to `~/.claude/projects/<project path with non-alphanumerics 
 1. **Pick the input.** List the main session files with their modification times and whether they have a `subagents/` directory. Choose the orchestrator session(s) of the run with `--session`, or bound it with `--since/--until`. Exclude your own current session. Ask the user if the run is ambiguous.
 2. **Run it** with `--out-dir` in your scratchpad, or `~/.claude/spec-workflow-retro/<project slug>/<label>/` if the user wants to compare versions later. `--label` is the plugin version (`.claude-plugin/plugin.json`).
 3. **Sanity-check** before trusting it: runs per spec match the tracker history, `final_context` per run is close to the `subagent_tokens` in that agent's task notification, and tool-call counts match. Report any mismatch instead of hiding it.
-4. **Verify each finding** against the current plugin: read the named skill file and section. Drop a finding the current text already addresses (say so), and sharpen the proposal to an exact edit.
-5. **Report** the top 10 (see Output) to the user.
-6. **Record**: append each new finding to `plugins/spec-workflow/ISSUES.md` (plugin source, not the cache) as an item headed with its key, e.g. `### N. <title> (retro: turns.batching)`. Skip keys that already appear; update their numbers instead when the user asks.
-7. With `--compare`, report regressions and resolved findings between versions.
+4. **Verify each finding** against the current plugin: read the named skill file and section. Drop a finding the current text already addresses (say so), and sharpen the proposal to an exact edit. Vet every number you lean on with `benchmark-checklist` (run count, spread, what limits it).
+5. **Review from three angles**, as three parallel read-only subagents on the report and the tracker records: **judgment** (where agents made wrong calls, and which skill text would have changed them), **tooling** (where a tracker command, gate, hook, or toolkit tool would have prevented the failure or removed a step), and **divergent** (what the other two would miss: a different workflow shape, a step to delete). A fourth subagent synthesizes their findings into Accepted, Rejected (with reason), and Backlog.
+6. **Encode before you write**: move any Accepted item that a tracker refusal, gate, hook, lint, or script would enforce more reliably than prose to a structural proposal (the `correct` skill's levels). Prose edits are for judgment calls only.
+7. **Report** the top 10 (see Output) to the user. Skill edits wait for the user's approval; they change every future agent.
+8. **Record**: append each new finding to `plugins/spec-workflow/ISSUES.md` (plugin source, not the cache) as an item headed with its key, e.g. `### N. <title> (retro: turns.batching)`. Skip keys that already appear; update their numbers instead when the user asks.
+9. With `--compare`, report regressions and resolved findings between versions.
 
 ## Metrics
 

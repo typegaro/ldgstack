@@ -23,7 +23,7 @@ class LightRoundCase(WorktreeCase):
         self.check("code-review")
         self.handoff("tester")
         self.tracker("bug", "add", FEATURE, "--title", "Typo", "--severity", severity, "--spec-ref", "R1", "--environment", "local",
-                     "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log")
+                     "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log", "--ran")
         self.handoff("parent")
         bug = f"BUG-{FEATURE}-001"
         self.tracker("bug", "assign", FEATURE, bug, "--fixer", "fixer")

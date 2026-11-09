@@ -5,7 +5,9 @@ description: Rules for independently testing an implemented specification by exe
 
 # Spec Tester
 
-Load `spec-tracker` for the CLI, gates, severity scale, and blocker report format, and `test-toolkit` for the toolkit and tool gaps.
+Load `spec-tracker` for the CLI, gates, severity scale, and blocker report format, `test-toolkit` for the toolkit and tool gaps, and `verification-map` for how to reach and prove each feature. Start your report by restating the spec's goal in your own words.
+
+**Parallel verify.** When the record is `ready_for_verify`, the reviewer works on the same patch at the same time. Pass `--as tester` on `check add`, `bug add`, and your final `handoff --to parent`. Don't wait for the review and don't read its findings; your verdict covers the patch you tested, recorded automatically with each check.
 
 ## Boundaries
 
@@ -29,7 +31,8 @@ Before executing anything, map each requirement and plan item to the capabilitie
 
 ## 2. Preparation
 
-- Confirm with `status` that the record is `ready_for_test` or `ready_for_retest`. If the handoff is incomplete, report that to the parent; don't guess at missing setup.
+- Read the verification map's files for the features this spec touches before planning how to drive them; when the spec adds or changes a user-facing feature, extend the map (its feature file and the index) in the same round, or record a tool gap if you can't.
+- Confirm with `status` that the record is `ready_for_test`, `ready_for_retest`, or `ready_for_verify`. If the handoff is incomplete, report that to the parent; don't guess at missing setup.
 - Use the toolchain command prefix the parent supplied, in the brief's `Worktree:` checkout. If you cannot build, run, or reach required services, stop and hand off to the parent with the failure. **Never verify by reading code alone.**
 - Your `claim` holds a test-queue slot and your handoff frees it: run one isolated stack, run the full suite once, and tear the stack down before your handoff so the next spec's tester can start. Fast CI (`ci-fast`) is the implementer's evidence, not yours.
 - Prepare isolated test data. Never put secrets in the record.
@@ -58,6 +61,7 @@ Record each executed method with `check add` (`--result passed|failed|not_run|no
 
 - Test every requirement and every plan item, not just happy paths. Mark each requirement with `requirement tested --evidence` describing what you observed.
 - If expected behavior is missing or contradictory in the spec, stop that path and raise a blocker. Don't invent the expectation.
+- Every bug you file is one you reproduced: `bug add --ran` (or `--preexisting` when main already shows it and the change doesn't newly reach it).
 - One `bug add` per independently reproducible defect, with severity, exact spec reference, environment, minimal deterministic reproduction, expected and actual behavior, and bounded evidence. Reuse the same ID when a fix fails (`bug reopen`); never duplicate.
 - Don't report preferences as bugs.
 
@@ -71,4 +75,4 @@ Record each executed method with `check add` (`--result passed|failed|not_run|no
 
 ## Handoff
 
-`handoff --to parent`. The CLI sets `ready_for_acceptance` or `bugs_found`. Report tested surfaces, commands and toolkit tools used, bug IDs, tool gap IDs, coverage gaps, untested requirements, environment limits, blockers, and confirmation that you changed no spec or implementation file.
+`handoff --to parent` (`--as tester` during parallel verify). The CLI sets `ready_for_acceptance` or `bugs_found`. Report tested surfaces, commands and toolkit tools used, bug IDs, tool gap IDs, coverage gaps, untested requirements, environment limits, blockers, and confirmation that you changed no spec or implementation file.

@@ -34,6 +34,38 @@ def main_heads(root: Path, config: Record, repos: list[str]) -> dict[str, str]:
     return {repo: workspace.head(root / repo / config["main"]) for repo in repos}
 
 
+def patch_ids(root: Path, config: Record, repos: list[str], branch: str) -> dict[str, str]:
+    """`git patch-id --stable` of each repo's branch diff against its merge base with main ("" when the branch changes
+    nothing). A clean rebase or merge of main keeps it; any change to the code that would land changes it."""
+    found = {}
+    for repo in repos:
+        main = root / repo / config["main"]
+        diff = workspace.git(main, "diff", "--no-color", "--no-ext-diff", f"HEAD...{branch}").stdout
+        output = subprocess.run(["git", "patch-id", "--stable"], input=diff, cwd=main, capture_output=True, text=True).stdout.split() if diff.strip() else []
+        found[repo] = output[0] if output else ""
+    return found
+
+
+def code_patch(root: Path, record: Record) -> dict[str, str] | None:
+    """The patch a reviewer or tester verdict covers (worktree mode); None outside worktree mode or after the merge."""
+    tree = record.get("worktree")
+    if not tree or tree.get("removed_at") or tree.get("merged_at"):
+        return None
+    try:
+        config = workspace.load(root)
+        return patch_ids(root, config, tree["repos"], tree["branch"]) if config else None
+    except (workspace.WorkspaceError, subprocess.CalledProcessError):
+        return None
+
+
+def red_on_main(root: Path, config: Record, failed: Record, feature: str) -> Record | None:
+    """Re-run a merge-queue failure on main: a failure there too is main's (the base already has it), not the spec's."""
+    main = root / failed["repo"] / config["main"]
+    code, output, spent = shell(root, config, failed["command"], main, None, {"SPEC_FEATURE": feature, "SPEC_BRANCH": config["main"]},
+                                config["ci_timeout"])
+    return {"repo": failed["repo"], "command": failed["command"], "exit": code, "seconds": spent, "tail": output.strip()[-OUTPUT_TAIL:]} if code else None
+
+
 def shell(root: Path, config: Record, command: str, cwd: Path, branch: str | None, env: dict[str, str], timeout: int) -> tuple[int, str, float]:
     started = time.monotonic()
     try:

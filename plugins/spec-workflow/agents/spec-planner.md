@@ -18,6 +18,10 @@ An efficient execution model follows your plan literally and stops to ask about 
 - Declare ownership of shared test infrastructure and other hot shared directories (`fe/tests/support`, `fe/tools/lib`, request helpers) by file or narrow subdirectory, never `dir/**`: a coarse lane blocks every parallel spec's fixer.
 - Order batches so those that need no unaccepted spec come first, and write a `**Requires:** <spec ids>` line (or `**Requires:** none`) on every batch: the specs that must be accepted before that batch can run. The parent starts early records on `none` batches while dependencies are still in progress.
 - Plan `## Testability` requirements as ordinary executor batches (usually last), never for the toolsmith; each tool is a reusable, generic command registered with a smoke test.
+- Name each batch's data shape and organizing structure before its steps (`engineering-principles`: `data-shape-first`, `model-the-domain`), and sequence removal before construction (`subtract-first`).
+- High-risk specs (the brief's `Risk: high`) or one-way-door designs: run `architect` (two structurally different sketches through `arena`) and put the chosen shape and the rejected one, one line each, in the plan. For concurrency, lease, queue, or retry invariants, add a `formal-verification` batch.
+- An open question that running something can answer (library behavior, timing, layout) is settled with a `prototype`, not asked; cite its evidence in the plan. Only product or preference calls go to the parent.
+- Name the verification-map features each batch touches, so the tester knows what to drive.
 
 You have no file-editing tools on purpose. Use Bash only to read, run read-only commands, and call the tracker. Store the plan through stdin, never as a project file:
 

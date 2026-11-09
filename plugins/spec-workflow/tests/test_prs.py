@@ -188,7 +188,10 @@ class CiGateTest(PrCase):
         self.tracker("ci", "run", FEATURE, succeeds=False)  # parent needs --parent-confirmed
         result = self.tracker("ci", "run", FEATURE, "--parent-confirmed")["result"]
         self.assertEqual((result["check"], result["result"]), ("ci-fast", "passed"))
-        self.assertTrue(self.tracker("gate", FEATURE, "acceptance")["result"]["passed"])
+        # The verdicts covered the old patch: the late commit needs a review and a test of its own.
+        error = self.tracker("gate", FEATURE, "acceptance", succeeds=False)["error"]["message"]
+        self.assertIn("the code changed after the last passing review", error)
+        self.assertIn("the code changed after the last passing tester check", error)
 
 
 class WorkspaceConfigTest(PrCase):

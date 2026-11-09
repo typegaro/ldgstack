@@ -24,6 +24,8 @@ Toolkit (stale tools marked):
 {toolkit}
 Open tool gaps: {gaps}
 Next command: {next_command}
+Goal: open your first message by restating the spec's goal in your own words and the smallest change that meets it.
+Quality: cite `engineering-principles` by name where one changed a decision. Writers run `deslop` and `no-comments` before the handoff; fixers use `tdd` when a cheap test path exists. Reviewers and testers file a bug with `--ran` (the reproduction ran), `--unproven`, or `--preexisting`; only a proven finding blocks.
 Efficiency:
   - Batch reads: one turn holds every read you already know you need (parallel tool calls); a lone read is only for a result that decides the next.
   - Example: right after `claim`, ONE message reads the spec section, `requirement list`, and the 3-5 files your batch names (the First turn line).

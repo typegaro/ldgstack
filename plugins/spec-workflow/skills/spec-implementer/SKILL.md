@@ -35,6 +35,9 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
 
 ## 3. Implementation rules
 
+- Open your first message by restating the spec's goal and the smallest change you expect to meet it. Load `engineering-principles` and cite the ones that shaped a decision in your handoff; load `go-practices` or `typescript-practices` for the files you touch.
+- Name the data shape before writing logic (`data-shape-first`, `model-the-domain`): a state machine over scattered booleans, a table over a growing `if` chain, a typed model over repeated shape assumptions.
+- Write the smallest change that meets the requirement (`smallest-change`). Line count is never a goal on its own: the right amount of code is whatever the requirement and the conventions need.
 - Follow the architecture and dependency rules in the project instructions and the existing code. Put behavior in the module that owns the concept. Keep domain logic out of transport and persistence code. No dumping-ground modules, no speculative abstractions, no circular dependencies.
 - Pass cancellation/context through boundaries. Preserve ownership, authorization, transaction, secret, lifecycle, retry, and concurrency invariants.
 - Never swallow errors. Every error is returned, handled, or logged with its context. Every timeout and limit is explicit and deliberate; don't inherit them from shared clients by accident.
@@ -65,7 +68,7 @@ While a blocker is pending, continue only work that cannot prejudice the decisio
    New tests must be parallel-safe: isolated per worker and independent of order. Mark a test serial only with a one-line reason.
 3. Record a check you could not run as `not_run` with the reason, and name it in your report. It doesn't block review or test handoffs, but it blocks acceptance until it runs or the user waives it. Use `not_applicable` (with the reason) only for a check that does not apply.
 4. Run the inspection CLI's `check all` (if it has none, record it as `not_applicable`). A violation is a bug to fix or report, never something to ignore.
-5. Run `spec-check`. Inspect the diff for unrelated edits, leaked secrets, generated-file drift, and boundary violations.
+5. Run `spec-check`. Inspect the diff for unrelated edits, leaked secrets, generated-file drift, and boundary violations. Then clean it before review: `deslop` (narrating comments, speculative guards, dead code, duplicate helpers) and `no-comments` (a fresh comment reviewer), and rerun the focused tests.
 6. Worktree mode: `pr open <feature> --completed "..." --remaining "..."` (commits, conflict check against main, PR checks, fast CI, then the reviewer; on a refusal fix what it names and run it again). Otherwise `handoff --to reviewer` (this passes `ready-test` automatically). `--to parent` when blocked. Hand off `--to tester` only when the parent's prompt says so: the CLI allows it only after a passed review, when you implemented nothing but requirements added since that review.
 
 ## Planner role
@@ -77,10 +80,11 @@ Load this skill for its boundaries, then follow the planner agent and [reference
 When assigned as fixer:
 
 - Fix only the parent-assigned bug IDs and the regressions they need.
-- Reproduce each bug from its recorded steps before changing code. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
+- Reproduce each bug from its recorded steps before changing code. Use `tdd` when a cheap focused test path exists: the failing test first, then the fix. For a code-review finding with no runtime reproduction, first write a test that fails because of the defect.
+- Fix the root cause, not the place it surfaced (`fix-root-causes`); look for the same fault elsewhere in your lane and fix every instance. When two fixes resting on one belief fail, test the belief before a third (`attack-the-premise`).
 - Add a regression test that fails without the fix. Record `bug fixed` with the fix and that test.
 - Never verify your own fix.
-- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed (fresh reviewer for high risk, the finding reviewer on the fix diff otherwise) before independent retest. Exception: when every bug you fixed is low and the fix is small (or only tests, config, or docs) and touches nothing sensitive, end with `pr open --light "<why>"` (`handoff --to tester --light` without CI); the tracker measures the diff and refuses otherwise, then use the plain command.
+- Run the relevant checks, then `pr open` (worktree mode) or `handoff --to reviewer`; every fix generation is reviewed and retested (in worktree mode `pr open` starts both at once, on the fix diff). Exception: when every bug you fixed is low and the fix is small (or only tests, config, or docs) and touches nothing sensitive, end with `pr open --light "<why>"` (`handoff --to tester --light` without CI); the tracker measures the diff and refuses otherwise, then use the plain command.
 - A stack E2E (anything that starts the shared stack) runs inside `tracker queue hold test --feature <feature> --class stack --run "<command>"`, so it never overlaps a tester's run.
 - A merge-conflict or merge-queue CI bug: in your worktree, `git merge <main>`, resolve, rerun the focused tests, record the resolution as the fix, then `pr open`. Name the resolved files in your report: a fresh focused review checks them.
 

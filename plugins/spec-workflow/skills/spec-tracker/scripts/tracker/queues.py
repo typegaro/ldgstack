@@ -69,6 +69,8 @@ def find(state: Record, queue: str, feature: str) -> Record | None:
 def wanted(queue: str, record: Record) -> bool:
     """Whether the record belongs in the queue now (items of records that left the role drop out)."""
     role = QUEUE_ROLE[queue]
+    if record["status"] == "ready_for_verify" and queue != "merge":
+        return role in (record["current_role"], record.get("side_role"))
     return record["current_role"] == role and (queue == "merge" or record["status"] in (
         ("ready_for_review",) if queue == "review" else ("ready_for_test", "ready_for_retest")))
 

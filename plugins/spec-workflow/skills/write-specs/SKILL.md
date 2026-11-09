@@ -42,6 +42,7 @@ Every rule that someone could check is a numbered bullet:
 - Cross-references use `<id>:R<n>`, e.g. `6:R3`.
 - Before acceptance, renumbering is fine. After acceptance, IDs are permanent: a newer spec changes or removes one with `(replaces X:Rn)` or `(removes X:Rn)` at the start of its own requirement.
 - Context, rationale, flows, examples, and diagrams are free text around the requirements.
+- For a requirement whose verification isn't obvious, add a scenario under it: `When <action> then <observable result>`. Testers drive the scenario; the verification map records how.
 
 ## Defined later and accepted risks
 
@@ -78,7 +79,7 @@ Each tool is reusable: a durable, generic command (subcommands, flags, JSON outp
 ## Workflow
 
 1. Run `spec list`, `spec later` and `spec risks`, and read the related specs. Run `spec show <id> --effective` for any spec you build on, and read the `decision` specs and accepted risks that affect the work. If the request matches an open `L` or `A` item, start from it: its text is the starting question list, and the new spec says `Resolves <id>:<item>`.
-2. Extract only the explicitly requested points, and ask about any ambiguity that would require assumptions.
+2. Restate the user's goal and the problem behind it in your own words (`sharpen` step 1) before drafting; a misreading costs one message here. Extract only the explicitly requested points, and ask about any ambiguity that would require assumptions. A question that running something could answer (does the library do X, which layout reads better, is approach A faster) is settled with a `prototype` instead, and its evidence is linked in the spec's Context; only product and preference calls go to the user.
 3. Decide: `spec edit` (not accepted yet) or `spec new` with the right kind and links.
 4. Write the body: concise context plus numbered requirements, and the `## Testability` section when it applies.
 5. Load and apply `adversarial-spec-review`, then ask all resulting material decision questions.

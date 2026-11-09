@@ -200,7 +200,7 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
     if not any(item["result"] == "passed" for item in checks):
         errors.append("no verification check has passed")
     # A tester's failed check is re-run by the tester on retest; it blocks acceptance, not the handoff back.
-    failed = [item["name"] for item in checks if item["result"] == "failed" and item["name"] not in exempt_checks
+    failed = [item["name"] for item in checks if item["result"] == "failed" and item["name"] not in exempt_checks and not item.get("main_red")
               and (gate == "acceptance" or item.get("role") not in exempt_roles)]
     if failed:
         detail = blocking_checks(record, {"failed"}) if gate == "acceptance" else ", ".join(failed)
@@ -220,11 +220,7 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
             errors.append("no passing code review by the reviewer")
         if not any(item["result"] == "passed" and item.get("role") == "tester" for item in checks):
             errors.append("no passing check executed by the independent tester")
-        # A reviewer re-running its own not_run check in the same generation changed no code, so it needs no new test round.
-        reviews = [item["at"] for item in review_passes(checks) if not reran_not_run(record, item)]
-        tests = [item["at"] for item in checks if item["result"] == "passed" and item.get("role") == "tester"]
-        if reviews and tests and max(tests) <= max(reviews):
-            errors.append("independent tester check must be recorded after the latest passing reviewer check")
+        errors += verdict_errors(root, record, checks)
         if any(item["status"] not in TERMINAL_BUG_STATUSES for item in record["bugs"]):
             errors.append("bugs remain unverified")
         gaps = [item["id"] for item in open_tool_gaps(record)]
@@ -235,6 +231,32 @@ def gate_errors(root: Path, record: dict[str, Any], gate: str, exempt_roles: tup
             errors.append(f"an agent resolved a merge with main ({flag['reason']}): a fresh focused review must pass after it")
         from . import ci  # noqa: PLC0415 (ci imports this module)
         errors += ci.gate_errors(root, record)
+    return errors
+
+
+def verdict_errors(root: Path, record: dict[str, Any], checks: list[dict[str, Any]]) -> list[str]:
+    """A review or test verdict covers one patch. In worktree mode each check stores the branch's patch ids, so the gate
+    asks for a passing review and a passing tester check of the patch that would land: review and test may run in
+    parallel, a clean rebase keeps both, and any later code change needs them again. Records without patch ids keep
+    the older rule (the tester's check after the latest passing review)."""
+    reviews = review_passes(checks)
+    tests = [item for item in checks if item["result"] == "passed" and item.get("role") == "tester"]
+    if not reviews or not tests:
+        return []
+    from . import ci  # noqa: PLC0415 (ci imports this module)
+    current = ci.code_patch(root, record) if any("patch" in item for item in reviews + tests) else None
+    if current is None:
+        # A reviewer re-running its own not_run check in the same generation changed no code, so it needs no new test round.
+        latest_review = [item["at"] for item in reviews if not reran_not_run(record, item)]
+        if latest_review and max(item["at"] for item in tests) <= max(latest_review):
+            return ["independent tester check must be recorded after the latest passing reviewer check"]
+        return []
+    errors = []
+    if not any(item.get("patch") == current for item in reviews):
+        errors.append("the code changed after the last passing review (its patch id differs from the branch): the reviewer reviews "
+                      "the change, or the fixer's light round records `rereview-skipped`")
+    if not any(item.get("patch") == current for item in tests):
+        errors.append("the code changed after the last passing tester check (its patch id differs from the branch): the tester retests it")
     return errors
 
 

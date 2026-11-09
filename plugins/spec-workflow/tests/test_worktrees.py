@@ -35,7 +35,7 @@ class WorktreeCase(CliTestCase):
         (self.root / "be" / "main" / ".env").write_text("PORT=1\nexport DATABASE_URL=postgres://dev/app\n", encoding="utf-8")
         implementation = self.root / "implementation"
         implementation.mkdir()
-        (implementation / "workspace.json").write_text(json.dumps({"repos": ["be", "fe"], "copy": {"be": [".env"]},
+        (implementation / "workspace.json").write_text(json.dumps({"repos": ["be", "fe"], "copy": {"be": [".env"]}, "verify": "sequential",
                                                                            "env": {"be": {".env": {"DATABASE_URL": "postgres://localhost/none"}}}}), encoding="utf-8")
         (implementation / "preflight.json").write_text(json.dumps({"commands": ["cd be && test -f internal/a.go", "cd fe/src && ls"]}),
                                                       encoding="utf-8")
@@ -392,7 +392,7 @@ class FollowUpTest(WorktreeCase):
         self.implement()
         for severity in ("low", "medium", "high"):
             self.tracker("bug", "add", FEATURE, "--title", f"{severity} issue", "--severity", severity, "--spec-ref", "R1",
-                         "--environment", "local", "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log")
+                         "--environment", "local", "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log", "--ran")
         low, medium, high = (f"BUG-{FEATURE}-00{n}" for n in (1, 2, 3))
         self.tracker("requirement", "tested", FEATURE, "REQ-001", "--evidence", "observed")
         self.check("independent")

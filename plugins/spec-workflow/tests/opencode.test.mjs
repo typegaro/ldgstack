@@ -24,7 +24,8 @@ test("skills and agents load from the shared plugin", () => {
   assert.ok(skills.every((skill) => skill.description && !skill.content.startsWith("---")))
 
   const agents = Object.fromEntries(loadAgents().map(({ name, config }) => [name, config]))
-  assert.equal(Object.keys(agents).length, 6)
+  assert.equal(Object.keys(agents).length, 7)
+  assert.equal(agents["comment-reviewer"].permission.edit, "deny")
   assert.equal(agents["spec-tester"].permission.edit, "deny")
   assert.equal(agents["spec-reviewer"].permission.edit, "deny")
   assert.equal(agents["spec-planner"].permission.edit, "deny")
@@ -41,7 +42,7 @@ test("1.x: config registers skills and agents, keeping user overrides", async ()
   assert.deepEqual(config.skills.paths, [SKILLS])
   assert.equal(config.agent["spec-planner"].model, "provider/deep")
   assert.equal(config.agent["spec-planner"].mode, "subagent")
-  assert.equal(Object.keys(config.agent).length, 6)
+  assert.equal(Object.keys(config.agent).length, 7)
 })
 
 test("1.x: the guard denies workflow-state and spec edits, and subagent spec edits", async () => {

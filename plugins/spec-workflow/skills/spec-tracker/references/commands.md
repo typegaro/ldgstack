@@ -11,7 +11,12 @@ tracker requirement tested 0000-project-bootstrap REQ-001 --evidence "..."
 tracker file add 0000-project-bootstrap be/internal/database/pool.go
 tracker check add 0000-project-bootstrap --name go-tests --method "go test ./..." --result passed|failed|not_run|not_applicable --evidence "ok 14 packages"
 tracker bug add 0000-project-bootstrap --title "..." --severity high --spec-ref "..." --environment "..." \
-  --reproduction "..." --expected "..." --actual "..." --evidence "..."
+  --reproduction "<command>" --expected "..." --actual "<output>" --evidence "..." --ran   # or --unproven / --preexisting
+tracker check add 0000-project-bootstrap --name code-review ... --as reviewer      # parallel verify: --as reviewer|tester
+tracker handoff 0000-project-bootstrap --to parent --as tester --completed "..." --remaining "..."   # each verify role ends so
+tracker stuck                                                                      # idle assignments, with the retry rule
+tracker decision add --feature 0000-project-bootstrap --decision "..." --why "..." --evidence "..."   # --waiting --pick --risk
+tracker decision list --waiting ; tracker decision resolve D-001 --answer "<the user's words>"
 tracker bug assign|fixed|verify|reopen|close 0000-project-bootstrap BUG-0000-project-bootstrap-001 ...
 tracker blocker add 0000-project-bootstrap --summary "..." --report "<blocker report>"
 tracker handoff 0000-project-bootstrap --to tester --completed "..." --remaining "..." [--checks-not-run "..."]

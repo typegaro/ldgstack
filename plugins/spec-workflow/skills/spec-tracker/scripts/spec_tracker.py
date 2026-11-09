@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tracker import brief as briefs
-from tracker import ci, deps, fixround, queues, toolkit
+from tracker import ci, deps, fixround, queues, supervise, toolkit
 from tracker import paths as lanes
 from tracker import plan as plans
 from tracker import requirements as spec_requirements
@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--method", required=True)
     check.add_argument("--result", choices=CHECK_RESULTS, required=True)
     check.add_argument("--evidence", required=True)
+    check.add_argument("--as", dest="as_role", choices=("reviewer", "tester"), help="during parallel verify (ready_for_verify): the role you act as")
     waive = command(checks, "waive", confirmed=True)
     waive.add_argument("name")
     waive.add_argument("--reason", required=True)
@@ -90,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         bug_add.add_argument(f"--{name.replace('_', '-')}", required=True)
     bug_add.add_argument("--parent-confirmed", action="store_true", help="the parent files a finding (e.g. the final whole-codebase review)")
     bug_add.add_argument("--found-by", help="with --parent-confirmed: who found it (e.g. final-review); recorded for the retro")
+    bug_add.add_argument("--as", dest="as_role", choices=("reviewer", "tester"), help="during parallel verify (ready_for_verify): the role you act as")
+    proof = bug_add.add_mutually_exclusive_group()
+    proof.add_argument("--ran", action="store_true", help="you ran --reproduction against the real code and --actual is its output (the finding can block)")
+    proof.add_argument("--unproven", action="store_true", help="found by reading, not by a run: filed as a follow-up unless high or critical")
+    proof.add_argument("--preexisting", action="store_true", help="main already has it and the change neither copies nor newly reaches it: filed as a follow-up")
     command(bugs, "assign", item=True).add_argument("--fixer", required=True)
     fixed = command(bugs, "fixed", item=True)
     fixed.add_argument("--fix", required=True)
@@ -171,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("--user-decision", help="to implementer before depends_on/amends are accepted (the user's words)")
     handoff.add_argument("--question", help="--to parent: ask the parent instead of improvising; sets needs_answer")
     handoff.add_argument("--reason", help="with --parent-confirmed: why the implementer may start without a plan")
+    handoff.add_argument("--as", dest="as_role", choices=("reviewer", "tester"), help="during parallel verify (ready_for_verify): the role you act as")
     handoff.add_argument("--light", metavar="REASON", help="fixer -> tester without a fresh review: only low bugs, a small or "
                                                           "test/config/docs-only diff, nothing sensitive (worktree mode)")
 
@@ -271,6 +278,26 @@ def build_parser() -> argparse.ArgumentParser:
     ran.add_argument("queue", choices=("merge",))
     ran.add_argument("--parent-confirmed", action="store_true")
 
+    stalled = commands.add_parser("stuck", help="active assignments with no claim, record write, or commit past their role's usual run time")
+    stalled.add_argument("--role", choices=[role for role in ROLES if role != "parent"])
+    decisions = commands.add_parser("decision", help="the program's append-only decision log; calls waiting on the user").add_subparsers(
+        dest="action", required=True)
+    logged = decisions.add_parser("add", help="log a decision the parent made alone, or (--waiting) a call only the user can make")
+    logged.add_argument("--feature", help="the spec it concerns (omit for program-wide decisions)")
+    logged.add_argument("--phase", default="run", help="the phase or workstream")
+    logged.add_argument("--decision", required=True, help="what was chosen or done, one line")
+    logged.add_argument("--why", required=True, help="the reason in plain words")
+    logged.add_argument("--evidence", required=True, help="a pointer that proves it: check name, commit, file:line, log path")
+    logged.add_argument("--result", default="", help="outcome or predicate state")
+    logged.add_argument("--waiting", action="store_true", help="a call only the user can make (irreversible, product, or preference)")
+    logged.add_argument("--pick", help="with --waiting: your recommendation")
+    logged.add_argument("--risk", help="with --waiting: what could go wrong, and what cannot be undone")
+    listed = decisions.add_parser("list", help="decisions, and the calls still waiting on the user")
+    listed.add_argument("--feature")
+    listed.add_argument("--waiting", action="store_true")
+    resolved = decisions.add_parser("resolve", help="record the user's answer to a waiting call")
+    resolved.add_argument("id")
+    resolved.add_argument("--answer", required=True, help="the user's words")
     ui = commands.add_parser("ui", help="serve the read-only dashboard on localhost")
     ui.add_argument("--port", type=int, default=8733)
     ui.add_argument("--host", default="127.0.0.1")
@@ -609,6 +636,31 @@ def changed_file(root: Path, args: argparse.Namespace) -> Record:
     return edit(root, args.feature, {"implementer", "fixer", "toolsmith"}, change)
 
 
+def verifying(record: Record) -> bool:
+    """Parallel verify: the reviewer (current role) and the tester (side role) work on the same patch at once."""
+    return bool(record.get("verify")) and record.get("side_role") == "tester"
+
+
+def acting_role(record: Record, args: argparse.Namespace) -> str:
+    """The role a command acts as: the record's role, or during parallel verify the one named by --as."""
+    chosen = getattr(args, "as_role", None)
+    if verifying(record):
+        if chosen is None:
+            raise TrackerError(f"{record['feature']} is in parallel verify (the reviewer and the tester work at once): pass --as reviewer or --as tester")
+        return chosen
+    if chosen and chosen != record["current_role"]:
+        raise TrackerError(f"--as {chosen}: the record is with the {record['current_role']}")
+    return record["current_role"]
+
+
+def stamp(root: Path, record: Record, role: str) -> Record:
+    """A reviewer's or tester's verdict records the patch it covers (worktree mode); the acceptance gate compares it."""
+    if role not in {"reviewer", "tester", "fixer"}:
+        return {}
+    patch = ci.code_patch(root, record)
+    return {"patch": patch} if patch is not None else {}
+
+
 def check(root: Path, args: argparse.Namespace) -> Record:
     superseded: Record = {}
 
@@ -616,9 +668,10 @@ def check(root: Path, args: argparse.Namespace) -> Record:
         if args.name in ci.names(workspace_config(root, required=False)):
             raise TrackerError(f"{args.name} is recorded only by a CI run: `tracker pr open {record['feature']} ...` or `tracker ci run {record['feature']}`")
         latest = {item["name"]: item for item in latest_checks(record)}.get(args.name)
+        role = acting_role(record, args)
         owner = next((item.get("role") for item in reversed(record["checks"])
                       if item["name"] == args.name and item.get("role") in {"reviewer", "tester"}), None)
-        if owner is not None and record["current_role"] != owner:
+        if owner is not None and role != owner:
             raise TrackerError(f"the {owner}'s check {args.name} may only be re-recorded by the {owner}; route it back: "
                                f"`tracker handoff {record['feature']} --to {owner} --completed \"...\" --remaining \"re-record {args.name}\"`")
         if record["current_role"] == "parent":
@@ -631,7 +684,7 @@ def check(root: Path, args: argparse.Namespace) -> Record:
             superseded.update(superseded={"name": args.name, "result": latest["result"], "role": latest.get("role", "")})
         record["checks"].append({
             "name": args.name, "method": args.method, "result": args.result,
-            "evidence": args.evidence, "role": record["current_role"], "generation": generation(record), "at": now(),
+            "evidence": args.evidence, "role": role, "generation": generation(record), "at": now(), **stamp(root, record, role),
         })
 
     def waive(record: Record) -> None:
@@ -652,11 +705,27 @@ def check(root: Path, args: argparse.Namespace) -> Record:
 
 def bug(root: Path, args: argparse.Namespace) -> Record:
     def add(record: Record) -> None:
+        finder = args.found_by or acting_role(record, args)
+        status, extra = "open", {}
+        if args.preexisting:
+            status, extra = "follow_up", {"follow_up": "preexisting: main already has it and this change neither copies nor newly reaches it",
+                                          "proof": "preexisting"}
+        elif args.unproven:
+            # Only a finding a run proves blocks; a high or critical one stays open for the parent to weigh.
+            extra = {"proof": "unproven"}
+            if args.severity in ("low", "medium"):
+                status, extra["follow_up"] = "follow_up", "unproven: found by reading, no reproduction was run"
+        elif args.ran:
+            extra = {"proof": "ran"}
+        elif not args.parent_confirmed:
+            raise TrackerError("say how the finding is proven: --ran (you ran --reproduction against the real code and --actual is its "
+                               "output), --unproven (found by reading; filed as a follow-up unless high or critical), or --preexisting "
+                               "(main already has it)")
         record["bugs"].append({
             "id": next_id(record["bugs"], f"BUG-{record['feature']}-"), "title": args.title,
-            "status": "open", "severity": args.severity, "found_by": args.found_by or record["current_role"],
+            "status": status, "severity": args.severity, "found_by": finder,
             **{name: getattr(args, name) for name in BUG_FIELDS},
-            "assigned_fixer": "", "fix": "", "regression": "", "retest": "",
+            "assigned_fixer": "", "fix": "", "regression": "", "retest": "", **extra,
         })
 
     def transition(record: Record) -> None:
@@ -874,6 +943,11 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
     config = workspace_config(root, required=False)
 
     def change(record: Record) -> None:
+        if verifying(record) and not args.question:
+            finish_verify(record, args)
+            return
+        if getattr(args, "as_role", None) and args.as_role != record["current_role"]:
+            raise TrackerError(f"--as {args.as_role}: the record is with the {record['current_role']}")
         source, target = record["current_role"], args.to
         first_look = source == target == "parent" and record["status"] == "new"  # old flow: init, then handoff --to parent
         replan = (source, target) == ("implementer", "planner") and args.parent_confirmed and not any(item["implemented"] for item in record["requirements"])
@@ -902,6 +976,7 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                 "name": "rereview-skipped", "method": "tracker handoff --light", "result": "passed", "role": "fixer",
                 "evidence": f"{light}. Fix diff: {measured['lines']} lines in {', '.join(measured['files']) or 'no files'}; "
                             f"low bugs {', '.join(measured['bugs'])}", "generation": generation(record), "at": now(), "light": measured,
+                **stamp(root, record, "fixer"),
             })
         review_skipped = source == "implementer" and target == "tester"
         if review_skipped:
@@ -922,6 +997,8 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                 raise TrackerError("handoff blocked: " + "; ".join(errors))
             if target == "reviewer":
                 record["status"] = "ready_for_review"
+                if parallel_verify(config, record, source):
+                    record.update(status="ready_for_verify", verify={"at": now(), "from": source}, side_role="tester")
             else:
                 retest = any(item["status"] == "fixed" for item in record["bugs"])
                 record["status"] = "ready_for_retest" if retest else "ready_for_test"
@@ -963,6 +1040,10 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
                     item.update(status="released", released_at=now(), released_by="handoff")
         if target in READ_ONLY_ROLES:
             auto_assign(record, target)
+        if record.get("side_role") == "tester" and record.get("verify"):
+            add_lane(record, "tester")
+        elif record.get("verify") and target == "parent":
+            record.pop("verify")
         record["current_role"] = target
         if target == "parent":
             record["status"] = parent_status(root, record)
@@ -974,6 +1055,43 @@ def handoff(root: Path, args: argparse.Namespace) -> Record:
             record["handoff"]["review_skipped"] = True
 
     return edit(root, args.feature, set(ROLES), change)
+
+
+def parallel_verify(config: Record | None, record: Record, source: str) -> bool:
+    """A writer's handoff to review starts review and test at once on the same patch (workspace.json `verify`, default
+    parallel in worktree mode); open tool gaps keep the tester out, so review then runs alone."""
+    return bool(config and record.get("worktree") and config.get("verify") == "parallel" and source in {"implementer", "fixer"}
+                and not open_tool_gaps(record))
+
+
+def add_lane(record: Record, role: str) -> None:
+    """A read-only lane for a parallel role, keeping the other role's lane."""
+    items = record.setdefault("assignments", [])
+    if not any(item["status"] == "active" and item["role"] == role for item in items):
+        items.append({"id": next_id(items, f"ASSIGN-{record['feature']}-"), "role": role, "paths": [], "status": "active", "at": now(), "auto": True})
+
+
+def finish_verify(record: Record, args: argparse.Namespace) -> None:
+    """One of the two parallel roles is done: it hands off to the parent, and the other keeps the record. The last
+    one's ordinary `handoff --to parent` returns the record."""
+    role = acting_role(record, args)
+    if args.to != "parent":
+        raise TrackerError(f"during parallel verify each role ends with `tracker handoff {record['feature']} --to parent --as {role} "
+                           "--completed \"...\" --remaining \"...\"`; the last one returns the record to the parent")
+    if not (args.completed and args.remaining):
+        raise TrackerError("handoff needs --completed and --remaining")
+    other = "tester" if role == "reviewer" else "reviewer"
+    for item in record.get("assignments", []):
+        if item["status"] == "active" and item["role"] == role:
+            item.update(status="released", released_at=now(), released_by="verify")
+    record.setdefault("side_handoffs", []).append({"role": role, "completed": args.completed, "remaining": args.remaining,
+                                                   "checks_not_run": args.checks_not_run, "at": now()})
+    record.pop("side_role")
+    record["current_role"] = other
+    retest = any(item["status"] == "fixed" for item in record["bugs"])
+    record["status"] = "ready_for_review" if other == "reviewer" else ("ready_for_retest" if retest else "ready_for_test")
+    record["handoff"] = {"from": role, "completed": args.completed, "remaining": args.remaining, "checks_not_run": args.checks_not_run,
+                         "next_role": other, "verify": "the other role finishes, then hands off to the parent"}
 
 
 def answer(root: Path, args: argparse.Namespace) -> Record:
@@ -1558,14 +1676,14 @@ def workspace_config(root: Path, required: bool = True) -> Record | None:
 
 def testing(root: Path, record: Record) -> bool:
     """The record's tester is at work: the record is with the tester and an agent claimed its assignment."""
-    return record["current_role"] == "tester" and any(
+    return "tester" in (record["current_role"], record.get("side_role")) and any(
         item["status"] == "active" and item["role"] == "tester" and lanes.claimed(root, item["id"]) for item in record.get("assignments", []))
 
 
 def queue_slot(root: Path, record: Record, args: argparse.Namespace) -> None:
     """#77: reviewers and testers take slots of their queue's resource classes; a brief waits for the record's slot."""
     config = workspace_config(root, required=False)
-    if config is None or args.role != record["current_role"]:
+    if config is None or args.role not in (record["current_role"], record.get("side_role")):
         return
     queue = queues.ROLE_QUEUE[args.role]
     state = queues.sync(root, config)
@@ -2085,6 +2203,25 @@ def merge_run(root: Path, config: Record, args: argparse.Namespace) -> Record:
         raise
     hooks = ci.run_hooks(root, config, "pre_merge", feature, branch) if result is None or result["result"] == "passed" else []
     failed = hooks[-1] if hooks and hooks[-1]["exit"] else None
+    red = ci.red_on_main(root, config, result["failed"], feature) if result and result["result"] != "passed" else None
+    if red:
+        # The base already fails the same way: not this spec's bug. The item waits in the queue until main is fixed.
+        with project_lock(root):
+            state = queues.load(root)
+            for item in state["queues"]["merge"]["items"]:
+                if item["feature"] == feature and item["state"] == "running":
+                    item.update(state="granted")
+                    item.pop("started_at", None)
+            state["queues"]["merge"]["last"] = {"feature": feature, "result": "main_red", "at": now(), "main": red}
+            queues.save(root, state)
+            record = load(root, feature)
+            latest = next(item for item in reversed(record["checks"]) if item["name"] == "ci-fast")
+            latest["main_red"] = red  # main's failure, not the spec's: it neither blocks the gate nor returns the spec
+            save(root, record)
+        return {"feature": feature, "result": "main_red", "failure": ci.failure_text(result), "main": red,
+                "next": f"main fails `{red['command']}` too ({red['repo']}/{config['main']} exited {red['exit']}): fix main first "
+                        "(its own spec or a fix with the user's decision), then `tracker queue run merge --parent-confirmed` again; "
+                        f"{feature} keeps its place"}
     with project_lock(root):
         if (result and result["result"] != "passed") or failed:
             title = ci.failure_text(result) if result and result["result"] != "passed" else \
@@ -2157,6 +2294,7 @@ HANDLERS: dict[str, Callable[[Path, argparse.Namespace], Any]] = {
     "tool-gap": tool_gap, "toolkit": toolkit_command, "assign": assign, "claim": claim_assignment, "brief": brief,
     "plan": plan_command, "answer": answer, "join": join, "risk": set_risk, "follow-ups": follow_ups, "worktree": worktree,
     "pr": pr_command, "ci": ci_command, "queue": queue_command, "ui": ui_command,
+    "stuck": lambda root, args: supervise.stuck(root, args.role), "decision": supervise.decision,
 }
 # Long-running commands take the project lock per step, so CI runs and waits never block other agents' tracker calls.
 LOCK_FREE = {"pr", "ci", "queue", "ui"}

@@ -67,7 +67,7 @@ class NarrowRestoreTest(CliTestCase):
 class ParentBugTest(CliTestCase):
     def add(self, *extra: str, succeeds: bool = True) -> dict:
         return self.tracker("bug", "add", FEATURE, "--title", "Escaped defect", "--severity", "medium", "--spec-ref", "R1",
-                            "--environment", "local", "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log",
+                            "--environment", "local", "--reproduction", "run", "--expected", "a", "--actual", "b", "--evidence", "log", "--ran",
                             *extra, succeeds=succeeds)
 
     def test_the_parent_files_final_review_findings(self) -> None:

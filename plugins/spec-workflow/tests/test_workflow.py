@@ -97,7 +97,7 @@ class CliTestCase(unittest.TestCase):
     def report_bug(self) -> None:
         self.tracker(
             "bug", "add", self.feature, "--title", "Broken", "--severity", "high", "--spec-ref", "Required behavior",
-            "--environment", "local", "--reproduction", "run", "--expected", "works", "--actual", "fails", "--evidence", "trace",
+            "--environment", "local", "--reproduction", "run", "--expected", "works", "--actual", "fails", "--evidence", "trace", "--ran",
         )
 
     def accept(self) -> None:

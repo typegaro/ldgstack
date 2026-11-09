@@ -227,20 +227,18 @@ class MergeQueueTest(PrCase):
         self.tracker("assign", FEATURE, "--role", "reviewer", "--read-only", "--parent-confirmed")
         self.assertIn("Focus first on the merge with main an agent resolved", self.tracker("brief", FEATURE, "--role", "reviewer")["result"])
 
-    def test_ci_failure_after_merging_main_returns_the_record(self) -> None:
+    def test_a_ci_failure_main_shares_keeps_the_record_and_its_place(self) -> None:
         self.to_acceptance(FEATURE)
-        before = self.main_commit("BREAK", "")
+        before = self.main_commit("BREAK", "")  # main itself now fails `test ! -f BREAK`
         self.tracker("queue", "add", "merge", FEATURE, "--parent-confirmed")
         result = self.run_merge()
-        self.assertEqual(result["result"], "ci_failed")
+        self.assertEqual(result["result"], "main_red")
         self.assertIn("`test ! -f BREAK`", result["failure"])
         record = self.record()
-        self.assertEqual(record["current_role"], "fixer")
-        self.assertNotIn("rereview_required", record)
+        self.assertEqual((record["current_role"], record["bugs"]), ("parent", []))
         self.assertEqual(git(self.root / "be" / "main", "rev-parse", "HEAD"), before)
-        self.assertTrue((self.root / "be" / BRANCH / "BREAK").is_file())  # the merge of main stays on the branch for the fixer
-        self.assertEqual(self.queue_status()["merge"]["last"]["result"], "ci_failed")
-        self.assertEqual(self.tracker("queue", "run", "merge", "--parent-confirmed")["result"]["message"], "merge queue is empty")
+        self.assertEqual(self.queue_status()["merge"]["last"]["result"], "main_red")
+        self.assertEqual(self.run_merge()["result"], "main_red")  # still queued: it runs again once main is fixed
 
 
 if __name__ == "__main__":

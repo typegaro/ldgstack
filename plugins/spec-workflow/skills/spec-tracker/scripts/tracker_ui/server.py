@@ -170,6 +170,15 @@ class Project:
         result = self.cached("queue_status", lambda: self.run(TRACKER_CLI, "queue", "status"))
         return result if isinstance(result, dict) and isinstance(result.get("queues"), dict) else None
 
+    def attention(self) -> dict[str, Any]:
+        """Calls waiting on the user (`decision list`) and agents with no progress past their role's usual time (`stuck`)."""
+        decisions = self.cached("decisions", lambda: self.run(TRACKER_CLI, "decision", "list"))
+        stalled = self.cached("stuck", lambda: self.run(TRACKER_CLI, "stuck"))
+        return {"available": isinstance(decisions, dict) and isinstance(stalled, dict),
+                "waiting": decisions.get("waiting", []) if isinstance(decisions, dict) else [],
+                "decisions": (decisions.get("decisions", []) if isinstance(decisions, dict) else [])[-50:],
+                "stuck": stalled.get("stuck", []) if isinstance(stalled, dict) else []}
+
     def main_heads(self) -> dict[str, str]:
         workspace = self.read_json(self.root / "implementation" / "workspace.json")
         heads: dict[str, str] = {}
@@ -199,7 +208,7 @@ def record_stage(status: str, role: str) -> str:
         return "accepted"
     if status in {"new", "planning"}:
         return "planning"
-    if status == "ready_for_review":
+    if status in {"ready_for_review", "ready_for_verify"}:
         return "review"
     if status in {"ready_for_test", "ready_for_retest"}:
         return "test"
@@ -270,6 +279,8 @@ def activity(record: dict[str, Any], stage: str) -> dict[str, str]:
         return {"label": f"{plural(len(bugs), 'bug')} found · waiting for a fixer", "tone": "bad"}
     if stage == "planning":
         return {"label": "writing the plan" if role == "planner" else "waiting to start", "tone": "" if role == "planner" else "warn"}
+    if status == "ready_for_verify":
+        return {"label": "reviewing and testing at the same time", "tone": ""}
     if stage == "review":
         what = "the fix" if fixing else "the code"
         return {"label": f"reviewing {what}", "tone": ""} if role == "reviewer" else {"label": f"waiting for a reviewer ({what})", "tone": "warn"}
@@ -846,7 +857,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         name = parts[1] if len(parts) > 1 else ""
         if len(parts) == 2:
-            static = {"prs": build_prs, "queues": build_queues, "specs": build_specs, "activity": build_activity, "backlog": build_backlog}
+            static = {"prs": build_prs, "queues": build_queues, "specs": build_specs, "activity": build_activity, "backlog": build_backlog,
+                      "attention": lambda project: project.attention()}
             if name in static:
                 self.send_json(static[name](project))
             elif name == "meta":

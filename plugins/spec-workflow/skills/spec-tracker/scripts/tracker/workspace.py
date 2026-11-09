@@ -9,13 +9,14 @@ accepted code and `<repo>/<branch>` per spec. Shared by the tracker, the path-gu
      "hooks": {"pre_merge": ["..."], "post_merge": ["..."], "pr_check": ["..."],
                "duplicate_numbers": [{"glob": "be/db/migrations/*.sql", "pattern": "^(\\d+)"}]},
      "registries": [{"when": ["be/db/migrations/*.sql"], "own": ["be/db/migrations/source.go"]}],
-     "light_fix": {"max_lines": 20, "paths": ["**/*_test.go", "**/*.md"], "sensitive": ["**/auth/**"]}}
+     "light_fix": {"max_lines": 20, "paths": ["**/*_test.go", "**/*.md"], "sensitive": ["**/auth/**"]}, "verify": "parallel"}
 
 `env` overrides keys in copied dotenv files, so a spec checkout never points at shared dev or production state.
 `slots` gives each queue (review, test, merge) its resource classes; a flat `{"stack": 1}` means test classes, and
 `test_slots: N` is `{"test": {"default": N}}`. CI commands run in `<repo>/<branch>`, hooks from the project root.
 `registries` adds `own` files (a migration index, a check-count test) to any plan or batch lane that touches `when`.
 `light_fix` sets when a fixer may send a low-severity fix straight to retest (`handoff --to tester --light`).
+`verify` is `parallel` (a writer's handoff to review starts the reviewer and the tester on the same patch) or `sequential`.
 
 Lane globs stay repo-relative (`be/internal/**`); in a worktree they select `be/<branch>/internal/**`."""
 from __future__ import annotations
@@ -58,7 +59,9 @@ def load(root: Path) -> dict[str, Any] | None:
     config.update(slots=slot_config(data.get("slots") or {}, config["test_slots"]), lease=seconds(data.get("lease", "2h"), "lease"),
                   ci=ci_config(data.get("ci") or {}, repos), ci_timeout=seconds(data.get("ci_timeout", 1800), "ci_timeout"),
                   hooks=hook_config(data.get("hooks") or {}), registries=registry_config(data.get("registries") or []),
-                  light_fix=light_fix_config(data.get("light_fix") or {}))
+                  light_fix=light_fix_config(data.get("light_fix") or {}), verify=data.get("verify", "parallel"))
+    if config["verify"] not in ("parallel", "sequential"):
+        raise WorkspaceError(f'{CONFIG}: "verify" is "parallel" (review and test at once, the default) or "sequential"')
     return config
 
 

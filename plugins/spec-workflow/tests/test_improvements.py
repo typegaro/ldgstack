@@ -316,7 +316,7 @@ class PapercutTest(CliTestCase):
     def test_bug_ids_accept_short_form(self) -> None:
         self.implement()
         self.tracker("bug", "add", FEATURE, "--title", "t", "--severity", "low", "--spec-ref", "r", "--environment", "e",
-                     "--reproduction", "r", "--expected", "e", "--actual", "a", "--evidence", "e")
+                     "--reproduction", "r", "--expected", "e", "--actual", "a", "--evidence", "e", "--ran")
         self.handoff("parent")
         self.tracker("bug", "assign", FEATURE, "BUG-001", "--fixer", "f")
         self.assertEqual(self.tracker("status", FEATURE)["result"]["bugs"], {"assigned": 1})
