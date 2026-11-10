@@ -320,6 +320,10 @@ From the pilot 0082/0087/0088 run.
 
 - Dashboard: the Pull requests view is now **Work** (In progress / Done). Each item's chip is its real phase (Planning, Developing, Reviewing, Testing, Merging, Done); fixing a bug stays in the phase that found it, so a tester's bug keeps the item in Testing. Next to the chip, a short line says what is happening now (fixing 2 bugs, waiting for a test slot, queued to merge · 1 ahead). An item in the merge phase lists what its merge is waiting for, step by step. Old `#/pulls` links still work.
 
+## Changes in 0.16.1
+
+- `engineering-principles`: every principle links to its full rule in `references/<name>.md`, ported from pstack's 24 principle skills with our names and cross-links (triggers, pattern, the signs you skipped it). The one-line index stays the part agents read up front. The thin upstream ones (smallest-change, compare-designs, migrate-then-delete, guard-the-context, encode-lessons, type-discipline) are filled in, and smallest-change measures new surface, not lines.
+
 ## Changes in 0.16.0
 
 A simpler flow for agents and the orchestrator (worktree mode). Measured before: 66 tracker commands with 178 flags; in 10 days of runs agents made 5,063 tracker calls and 257 were refused, `bug add` (13 required flags) 19% of the time.

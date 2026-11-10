@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -154,6 +155,17 @@ class GuidanceTest(unittest.TestCase):
         template = self.read("skills/write-specs/references/testability.md")
         for label in ("Inspection:", "Drivers:", "Fault and mocks:", "Environment:", "Verification:", "## Example"):
             self.assertIn(label, template)
+
+    def test_every_principle_links_to_its_full_rule(self) -> None:
+        skill = PLUGIN / "skills" / "engineering-principles"
+        links = re.findall(r"^- \*\*\[([a-z-]+)\]\(references/([a-z-]+)\.md\)", self.read("skills/engineering-principles/SKILL.md"), re.M)
+        self.assertEqual(len(links), 24)
+        for name, target in links:
+            self.assertEqual(name, target)
+            self.assertTrue((skill / "references" / f"{name}.md").read_text(encoding="utf-8").startswith(f"# {name}\n"), name)
+        for reference in (skill / "references").glob("*.md"):
+            for linked in re.findall(r"\]\(([a-z-]+\.md|\.\./\.\./[a-z-]+/SKILL\.md)\)", reference.read_text(encoding="utf-8")):
+                self.assertTrue((reference.parent / linked).exists(), f"{reference.name} -> {linked}")
 
 
 @unittest.skipUnless((COMPAT / "specs").is_dir(), "no compatibility fixture")
