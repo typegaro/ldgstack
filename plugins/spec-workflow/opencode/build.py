@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate the OpenCode agents (opencode/agents/*.md) from the Claude Code agents (agents/*.md), and keep the root
-package.json version equal to .claude-plugin/plugin.json. The Claude agents are the source; never edit the output.
+package.json version and the version in skills/ldgstack/SKILL.md equal to .claude-plugin/plugin.json. The Claude agents are the source; never edit the output.
 
 Usage: build.py [--check]   (--check exits 1 when an output is stale, for tests and CI)"""
 from __future__ import annotations
@@ -51,6 +51,8 @@ def outputs() -> dict[Path, str]:
     data = json.loads(package.read_text(encoding="utf-8"))
     data["version"] = version
     found[package] = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    skill = PLUGIN / "skills" / "ldgstack" / "SKILL.md"
+    found[skill] = re.sub(r"spec-workflow v\d+\.\d+\.\d+", f"spec-workflow v{version}", skill.read_text(encoding="utf-8"))
     return found
 
 

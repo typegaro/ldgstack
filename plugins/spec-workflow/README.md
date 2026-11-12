@@ -59,6 +59,7 @@ Agents inherit your default model. Set the tiers per agent, e.g. `"agent": {"spe
 | Skill | `how` / `why` / `blast-radius` | Grounding: how a subsystem works, why it is that way (cited), what a change can break (proven by a run) |
 | Skill | `interrogate` / `arena` / `swarm` / `architect` | Adversarial review kept to run-proven findings; parallel attempts with a cross-model judge; fan-out with one report; design twice before code |
 | Skill | `verification-map` / `formal-verification` / `benchmark-checklist` | Per-feature map for proving behavior (with drift maintenance); model-checked or property-tested invariants; vetting measured numbers |
+| Skill | `ldgstack` | The plugin version the session loaded, and how to check it against the latest and update |
 | Skill | `correct` / `catch-up` / `prototype` / `sharpen` | Turn repeated corrections into checks; catch the user up with waiting calls; settle empirical questions by prototype; restate and deepen a request |
 | Agent | `comment-reviewer` | Read-only comment verdicts for `no-comments` |
 | Agent | `spec-planner` (deep-reasoning tier) | Read-only planner: stores a batched plan with `tracker plan add` |
@@ -370,3 +371,7 @@ Speed and rigor ideas adapted from [pstack](https://github.com/cursor/plugins/tr
 - `registries` in workspace.json: files a lane also owns when it touches certain paths (a migration index, a check-count test). `plan add` and batch lanes include them. A batch's `**Files:**` outside the Ownership join it.
 - `brief --batch N` after batch M's lane gives batch N its own lane instead of reissuing M's.
 - `tracker queue hold test --feature F --class stack --run "<command>"`: a writer's stack E2E takes a test slot while it runs.
+
+## Changes in 0.17.0
+
+- New `ldgstack` skill: its description carries the loaded version (`spec-workflow vX.Y.Z`), so a session can compare what it loaded with the plugin on disk and the published one, and update with `/reload-plugins`. `opencode/build.py` keeps the version in sync with `plugin.json`; the tests fail while it is stale.
