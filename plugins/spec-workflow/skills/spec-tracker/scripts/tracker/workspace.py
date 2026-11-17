@@ -58,6 +58,10 @@ def load(root: Path) -> dict[str, Any] | None:
               "env": data.get("env") or {}}
     if not isinstance(config["test_slots"], int) or config["test_slots"] < 1:
         raise WorkspaceError(f'{CONFIG}: "test_slots" must be a positive integer')
+    if "writers" in data:
+        if not isinstance(data["writers"], int) or data["writers"] < 1:
+            raise WorkspaceError(f'{CONFIG}: "writers" must be a positive integer')
+        config["writers"] = data["writers"]
     caps, autos = split_auto(slot_config(data.get("slots") or {}, config["test_slots"]))
     config.update(slots=caps, auto_slots=autos, capacity=capacity_config(data.get("capacity") or {}), lease=seconds(data.get("lease", "2h"), "lease"),
                   ci=ci_config(data.get("ci") or {}, repos), ci_timeout=seconds(data.get("ci_timeout", 1800), "ci_timeout"),
