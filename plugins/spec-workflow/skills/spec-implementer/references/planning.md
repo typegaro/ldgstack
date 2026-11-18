@@ -30,7 +30,7 @@ A plan turns one spec into batches that an efficient execution model follows lit
 **Change shapes:** signatures, struct fields, SQL, and skeletons for anything non-obvious.
 **Edge cases:** each one, with the behavior the spec requires.
 **Tests:** file, test name, exact assertions (inputs → expected values or errors).
-**Commands:** exact build, lint, and test commands with the toolchain prefix.
+**Commands:** exact build, lint, and test commands with the toolchain prefix. Tests are focused: the test files, packages, or affected-test command (when the project has one) for what the batch touches. Never a full browser or end-to-end suite in a batch; the tester runs the full suites once, and the merge gate again.
 **Done when:** checklist, including `requirement implemented` for each ID and the `check add` names.
 
 ## Batch 2: ...
