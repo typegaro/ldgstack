@@ -64,6 +64,27 @@ def commit_time(root: Path, record: Record) -> str | None:
     return max(filter(None, stamps), default=None)
 
 
+def busy_time(root: Path, record: Record) -> str | None:
+    """Now, when any process runs inside the record's worktree: a long test run is progress, not a stall."""
+    tree = record.get("worktree")
+    if not tree or tree.get("removed_at"):
+        return None
+    dirs = [str((root / repo / tree["branch"]).resolve()) for repo in tree["repos"]]
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cwd = str((entry / "cwd").readlink())
+        except OSError:
+            continue
+        if any(cwd == d or cwd.startswith(d + "/") for d in dirs):
+            return now()
+    return None
+
+
 def stuck(root: Path, role: str | None = None) -> Record:
     records = all_records(root)
     limits = {name: threshold(samples) for name, samples in runtimes(records).items()}
@@ -71,12 +92,14 @@ def stuck(root: Path, role: str | None = None) -> Record:
     rows = []
     for record in (item for item in records if item.get("status") != "accepted"):
         commit = commit_time(root, record)
+        busy = busy_time(root, record)
         for lane in record.get("assignments", []):
             if lane.get("status") != "active" or (role and lane["role"] != role):
                 continue
             signals = {"assigned": lane.get("at"), "claimed": queues.claim_time(root, lane["id"]), "record write": record.get("updated_at")}
             if lane["role"] in WRITERS:
                 signals["commit"] = commit
+            signals["process"] = busy
             dated = [(name, stamp) for name, value in signals.items() if (stamp := parse(value)) is not None]
             name, last = max(dated, key=lambda item: item[1]) if dated else ("assigned", current)
             idle = (current - last).total_seconds()

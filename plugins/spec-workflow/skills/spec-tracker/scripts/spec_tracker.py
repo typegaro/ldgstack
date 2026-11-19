@@ -458,10 +458,10 @@ def testability_tools(root: Path, item: Record, evidence: str) -> list[Record]:
                f"{', '.join(tool['name'] for tool in tools) or 'none'}")
     if not named:
         raise TrackerError(f"{item['id']} ({item['spec_ref']}) is a Testability requirement: the evidence must name the toolkit tool or "
-                           f"inspect tool it added or changed and its smoke check; one-off scripts and test procedures don't count. Register it (`toolkit add|update`), run `toolkit verify <name>`, then {example}")
+                           f"inspect tool it added or changed and its smoke check; one-off scripts and test procedures don't count. Register it (`toolkit add|update`), run `toolkit verify <name> --feature <feature>`, then {example}")
     stale = [tool["name"] for tool in named if toolkit.stale(tool)]
     if stale:
-        raise TrackerError(f"{item['id']}: no passing smoke run since the last change of {', '.join(stale)}; run `toolkit verify {' '.join(stale)}` first")
+        raise TrackerError(f"{item['id']}: no passing smoke run since the last change of {', '.join(stale)}; run `toolkit verify {' '.join(stale)} --feature <this spec's feature>` first (--feature runs the smoke against the spec's worktree, not dev)")
     if not re.search(r"\b(smoke|verify)\b", evidence, re.IGNORECASE) or "--help" not in evidence:
         raise TrackerError(f"{item['id']}: name the smoke check and the tool's `--help` in the evidence too; {example}")
     return [{"name": tool["name"], "smoke": tool.get("smoke", ""), "verified_at": tool.get("verified_at", "")} for tool in named]
@@ -1595,6 +1595,9 @@ def fresh_assignment(root: Path, args: argparse.Namespace, reason: str = "brief 
                 raise TrackerError(f"no lane for batch {number} among the parallel lanes; `spec-tracker assign {record['feature']} "
                                    f"--role implementer --from-plan --batch {number} --parallel --parent-confirmed` first")
             active = mine or active
+        elif number is None and args.role == "implementer" and active and active[-1].get("batch") is not None:
+            # A replacement for a stalled agent keeps its batch; without it the brief and `done` widen to every requirement.
+            number = active[-1]["batch"]
         latest_plan = plans.latest(record, any_generation=True)
         carved: list[Record] = []
         new_batch = latest_plan is not None and next_batch(record, number)
@@ -2544,7 +2547,8 @@ def advance(root: Path, config: Record, record: Record, actions: list[Record], w
     if role == "parent" and not record["requirements"]:
         import_requirements(root, namespace(feature=feature, action="import", include_amended=False, exclude_amended=False))
         record = load(root, feature)
-    if role == "parent" and status in ("new", "awaiting_parent") and not plans.latest(record) and plans.needs_plan(record):
+    implemented = any(item["implemented"] for item in record["requirements"])
+    if role == "parent" and status in ("new", "awaiting_parent") and not implemented and not plans.latest(record) and plans.needs_plan(record):
         handoff(root, namespace(feature=feature, to="planner", completed="requirements imported", remaining="plan it"))
         actions.append(launch(root, feature, "planner", "plan the spec"))
         return
